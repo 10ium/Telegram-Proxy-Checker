@@ -1,0 +1,21 @@
+<resources>
+    <string name="app_name">تلگرام پروکسی چکر</string>
+    <string name="title">بررسی‌کننده پروکسی تلگرام</string>
+    <string name="input_label">لینک‌های اشتراک یا لیست پروکسی‌ها (هر خط یک عدد)</string>
+    <string name="start_btn">شروع بررسی</string>
+    <string name="stop_btn">توقف بررسی</string>
+    <string name="load_subs_btn">بارگذاری لینک‌های اشتراک</string>
+    <string name="copy_all">کپی همه سالم‌ها</string>
+    <string name="export_file">دریافت فایل متنی (TXT)</string>
+    <string name="copy_top_n">کپی تعداد مشخص از بهترین‌ها</string>
+    <string name="stats_checked">بررسی شده: %1$d از %2$d</string>
+    <string name="stats_working">سالم: %d</string>
+    <string name="stats_failed">خراب: %d</string>
+    <string name="placeholder_concurrency">تعداد همزمان</string>
+    <string name="placeholder_timeout">تایم‌اوت (ثانیه)</string>
+    <string name="log_skip_old_sub">لینک اشتراک قدیمی بود و نادیده گرفته شد: %s</string>
+    <string name="log_error_sub">خطا در بارگذاری لینک اشتراک: %s</string>
+    <string name="toast_copied">در کلیپ‌بورد کپی شد!</string>
+    <string name="toast_file_saved">فایل با موفقیت ذخیره شد!</string>
+    <string name="toast_empty">هیچ پروکسی سالمی برای کپی یا دریافت وجود ندارد!</string>
+</resources>
