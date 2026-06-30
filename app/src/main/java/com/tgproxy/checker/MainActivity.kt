@@ -388,4 +388,42 @@ fun CheckerScreen() {
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6))
             ) {
-                Text(stringRes
+                Text(stringResource(id = R.string.copy_all), fontSize = 11.sp)
+            }
+            Button(
+                onClick = { exportAsTxt() },
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669))
+            ) {
+                Text(stringResource(id = R.string.export_file), fontSize = 11.sp)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // کپی تعداد مشخص از بهترین‌ها
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = topNText,
+                onValueChange = { if (it.all { char -> char.isDigit() }) topNText = it },
+                label = { Text(stringResource(id = R.string.copy_top_n)) },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.width(100.dp),
+                singleLine = true
+            )
+            val copyTopNLabel = stringResource(id = R.string.copy_top_n)
+            val copyAllLabel = stringResource(id = R.string.copy_all)
+            Button(
+                onClick = { copyTopNToClipboard() },
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B5CF6))
+            ) {
+                Text("$copyTopNLabel $topNText ${copyAllLabel.substringAfter(" ")}")
+            }
+        }
+    }
+}
