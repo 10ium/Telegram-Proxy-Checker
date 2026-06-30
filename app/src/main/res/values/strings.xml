@@ -1,0 +1,21 @@
+<resources>
+    <string name="app_name">TG Proxy Checker</string>
+    <string name="title">Telegram Proxy Checker</string>
+    <string name="input_label">Proxy Source Links or Raw Proxies (one per line)</string>
+    <string name="start_btn">Start Verification</string>
+    <string name="stop_btn">Stop Verification</string>
+    <string name="load_subs_btn">Load Subscription Proxies</string>
+    <string name="copy_all">Copy All Working</string>
+    <string name="export_file">Export TXT File</string>
+    <string name="copy_top_n">Copy Top</string>
+    <string name="stats_checked">Checked: %1$d / %2$d</string>
+    <string name="stats_working">Working: %d</string>
+    <string name="stats_failed">Failed: %d</string>
+    <string name="placeholder_concurrency">Concurrency</string>
+    <string name="placeholder_timeout">Timeout (s)</string>
+    <string name="log_skip_old_sub">Skipped older sub link: %s</string>
+    <string name="log_error_sub">Error loading sub link: %s</string>
+    <string name="toast_copied">Copied to clipboard!</string>
+    <string name="toast_file_saved">File saved successfully!</string>
+    <string name="toast_empty">No working proxies to copy or export!</string>
+</resources>
