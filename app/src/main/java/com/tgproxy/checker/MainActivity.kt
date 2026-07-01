@@ -303,9 +303,42 @@ fun CheckerScreen() {
             color = Color.White,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 12.dp),
+                .padding(bottom = 6.dp),
             textAlign = TextAlign.Center
         )
+
+        // بخش گرافیکی دعوت به کانال تلگرام حامی برنامه
+        Card(
+            onClick = {
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/vpnclashfa"))
+                    context.startActivity(intent)
+                } catch (e: Exception) {
+                    Toast.makeText(context, "خطا در باز کردن تلگرام: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1D9BF0).copy(alpha = 0.15f)),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF1D9BF0))
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp, horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = "📢 عضویت در کانال تلگرام vpnclashfa",
+                    color = Color(0xFF60A5FA),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
 
         // ردیف تنظیمات: همزمانی و تایم اوت
         Row(
