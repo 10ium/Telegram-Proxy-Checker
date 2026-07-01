@@ -51,6 +51,23 @@ object ProxyChecker {
     }
 
     /**
+     * استخراج هوشمند و پاک‌سازی پروکسی‌ها از متن‌های به‌هم‌ریخته، نامنظم و فاقد ساختار
+     */
+    fun extractProxiesFromText(text: String): List<ProxyItem> {
+        if (text.trim().isEmpty()) return emptyList()
+        
+        // الگوی هوشمند شناسایی لینک‌های معتبر پروکسی در میان متون نامنظم و تبلیغاتی
+        val proxyRegex = Regex(
+            """(?i)(tg://proxy\?[^\s"'\n\r<>]+|https?://(?:t\.me|telegram\.me)/proxy\?[^\s"'\n\r<>]+|tg://socks\?[^\s"'\n\r<>]+|https?://(?:t\.me|telegram\.me)/socks\?[^\s"'\n\r<>]+|socks5?://[^\s"'\n\r<>]+)"""
+        )
+        val matches = proxyRegex.findAll(text)
+        val rawList = matches.mapNotNull { parseProxy(it.value) }.toList()
+        
+        // حذف تکراری‌ها بر اساس زوج سرور و پورت جهت بهینه‌سازی سرعت تست فرآیند
+        return rawList.distinctBy { "${it.host}:${it.port}" }
+    }
+
+    /**
      * تحلیل و پارس انواع مختلف لینک‌های پروکسی تلگرام
      */
     fun parseProxy(url: String): ProxyItem? {
@@ -146,7 +163,6 @@ object ProxyChecker {
         val start = System.currentTimeMillis()
         val cleanSecret = secretHex.trim().lowercase()
 
-        // ارزیابی اولیه اینکه آیا کانال از نوع Fake TLS است یا ساده
         val isFakeTls = cleanSecret.startsWith("ee") && cleanSecret.length > 34
 
         if (isFakeTls) {
@@ -154,7 +170,6 @@ object ProxyChecker {
             var rawSocket: Socket? = null
             var sslSocket: SSLSocket? = null
             try {
-                // استخراج دامنه شبیه‌سازی شده فیلترینگ از انتهای سکرت رمز
                 val domainHex = cleanSecret.substring(34)
                 val domainBytes = hexToBytes(domainHex)
                 if (domainBytes.isEmpty()) return -1L
@@ -176,10 +191,9 @@ object ProxyChecker {
                 // انجام دست‌تکانی واقعی TLS با سرور پروکسی
                 sslSocket.startHandshake()
                 
-                // در صورت موفقیت‌آمیز بودن ارتباط امن دوطرفه، اتصال پروکسی معتبر است
                 return System.currentTimeMillis() - start
             } catch (e: Exception) {
-                // شکست فرآیند ارتباط امن
+                // شکست ارتباط امن
             } finally {
                 try { sslSocket?.close() } catch (ignored: Exception) {}
                 try { rawSocket?.close() } catch (ignored: Exception) {}
