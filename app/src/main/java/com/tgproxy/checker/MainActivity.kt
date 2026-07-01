@@ -174,20 +174,23 @@ fun CheckerScreen() {
         }
     }
 
-    // متد شروع تایید همزمان پروکسی‌ها
+    // متد شروع تایید همزمان پروکسی‌ها با پارسر هوشمند و تخمین فیلترها
     fun startValidation() {
         val concurrency = concurrencyText.toIntOrNull() ?: 50
         val timeoutSec = timeoutText.toIntOrNull() ?: 5
         val timeoutMs = timeoutSec * 1000
 
-        // استخراج پروکسی‌ها از متن ورودی
-        val lines = inputText.split("\n")
-        val parsedList = lines.mapNotNull { ProxyChecker.parseProxy(it) }.distinctBy { "${it.host}:${it.port}" }
+        // استخراج و یکتاسازی هوشمند پروکسی‌ها از متن ورودی (فارغ از ساختار نامنظم متون)
+        val parsedList = ProxyChecker.extractProxiesFromText(inputText)
 
         if (parsedList.isEmpty()) {
             Toast.makeText(context, context.getString(R.string.toast_empty), Toast.LENGTH_SHORT).show()
             return
         }
+
+        // محاسبه تعداد آیتم‌های تکراری جهت ثبت لاگ آماری دقیق کلاینت
+        val rawMatchesCount = Regex("""(?i)(tg://proxy\?[^\s"'\n\r<>]+|https?://(?:t\.me|telegram\.me)/proxy\?[^\s"'\n\r<>]+|tg://socks\?[^\s"'\n\r<>]+|https?://(?:t\.me|telegram\.me)/socks\?[^\s"'\n\r<>]+|socks5?://[^\s"'\n\r<>]+)""").findAll(inputText).count()
+        val skippedDuplicates = rawMatchesCount - parsedList.size
 
         proxyList.clear()
         proxyList.addAll(parsedList)
@@ -199,7 +202,8 @@ fun CheckerScreen() {
         logsList.clear()
         isChecking = true
 
-        appendLog("Starting verify process for ${parsedList.size} proxies...")
+        appendLog("Extracted ${parsedList.size} unique proxies (Skipped $skippedDuplicates duplicate/invalid items).")
+        appendLog("Starting verify process...")
 
         checkJob = coroutineScope.launch {
             val semaphore = Semaphore(concurrency)
@@ -236,7 +240,7 @@ fun CheckerScreen() {
         appendLog("Verification stopped by user.")
     }
 
-    // لود لینک‌های اشتراک از کادر قابل ویرایش
+    // لود لینک‌های اشتراک از کادر قابل ویرایش (تنها این بخش خط‌به‌خط است)
     fun loadSubscriptions() {
         val links = subscriptionLinksText.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
         if (links.isEmpty()) {
@@ -410,7 +414,7 @@ fun CheckerScreen() {
             }
         }
 
-        // رندر کردن ویجت ورودی بر مبنای نوع انتخاب‌شده با برچسب‌های ثابت و رفع همپوشانی
+        // رندر کردن ویجت ورودی بر مبنای نوع انتخاب‌شده با برچسب‌های استاتیک دقیق و پارسر هوشمند
         when (inputMode) {
             InputMode.PASTE -> {
                 Column {
@@ -438,7 +442,7 @@ fun CheckerScreen() {
                     OutlinedTextField(
                         value = inputText,
                         onValueChange = { inputText = it },
-                        label = { Text("لیست پروکسی‌ها (هر پروکسی در یک خط)") },
+                        label = { Text("متن حاوی پروکسی‌ها (پشتیبانی از فرمت‌های نامنظم کانال‌ها)") },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(130.dp),
@@ -460,7 +464,7 @@ fun CheckerScreen() {
                     OutlinedTextField(
                         value = inputText,
                         onValueChange = { inputText = it },
-                        label = { Text("لیست پروکسی‌های بارگذاری شده از فایل") },
+                        label = { Text("متن فایل وارد شده (شناسایی هوشمند تمامی پروکسی‌ها)") },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(130.dp),
@@ -482,7 +486,7 @@ fun CheckerScreen() {
                     OutlinedTextField(
                         value = subscriptionLinksText,
                         onValueChange = { subscriptionLinksText = it },
-                        label = { Text("لینک‌های اشتراک پروکسی (قابل ویرایش)") },
+                        label = { Text("لینک‌های اشتراک پروکسی (خط‌به‌خط)") },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(130.dp),
