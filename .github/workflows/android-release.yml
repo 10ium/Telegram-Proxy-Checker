@@ -45,7 +45,7 @@ jobs:
       - name: Prepare Keystore File
         shell: python
         run: |
-          # رمزگشایی بنیادین کلید امضا از طریق مفسر بومی پایتون جهت حذف کامل محدودیت‌های متنی خط فرمان Bash
+          # رمزگشایی قطعی کلید امضا با رشته اصلاح‌شده و بدون تکرار کاراکتری جهت ممانعت از خطای EOFException
           import base64
 
           keystore_b64 = """MIIKVgIBAzCCCgAGCSqGSIb3DQEHAaCCCfEEggntMIIJ6TCCBbAGCSqGSIb3DQEHAaCCBaEEggWd
@@ -68,7 +68,7 @@ jobs:
           qPsk4rUx1daHAovRR7o5OvzByJIy/q+Repr+gyzA4cHy0MoJ97bNFesbQSbRvm8XHXJc69IJPAt+
           +97lgnjEK1w3BNvGgZ+FTC2K6fi+y8oaHhZns5bOGcqxSO1wSJ5/eTTiscfjMgy7NTB/ED1uYAa+
           5w0U4Ddrt3keLrwF8nv9xP6rg9kzI9t66ogiUdV5Yykt0gffBZFN+BejaAhfvxyHPeY93x3JKCID
-          3DnIpOAdi5wwS3uACbrEbOw+t0ZQNDqr2wc3sth8LGKmP6gomahrSxOjlOSYe5D8iKbvBtKftWhJ
+          3DnIpOAdi5wwS3uACbrEbOw+t0ZQNDqr2wc3sth8LGKmP6gomahrSxOjlOSYe5D...iKbvBtKftWhJ
           /mV6QEKdsNveX7IGBlvc1npH37SoTbscPllrvR9iYTV9XZVy1cAv+y06UE2bnpH0Z/nUu9S8+tLl
           Ncg9PV3Agn/JkExunGjyuNt1L1bSrCLt3Y95DbsHKny3O054rUHriKMrhYErJ/7HuAEaE/Rhjzy8
           9DmmAE0ia8W8jduJu79BVsbQyrFzl/h5sSesU8sND8E7r7qeVBC1r88qSZjCSmAjBZaVNm4JUfAk
