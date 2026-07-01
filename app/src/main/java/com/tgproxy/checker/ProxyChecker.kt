@@ -100,7 +100,7 @@ object ProxyChecker {
                 try { socket.close() } catch (ignored: Exception) {}
             } else {
                 // برای پروکسی‌های MTProto، تست اتصال با پروتکل رمزگذاری‌شده بومی انجام می‌شود
-                val resultPing = checkMtProtoProxy(proxy, timeoutMs)
+                val resultPing = checkMtProtoProxy(proxy.host, proxy.port, proxy.secret ?: "", timeoutMs)
                 if (resultPing > 0L) {
                     proxy.ping = resultPing
                     proxy.status = "Working"
