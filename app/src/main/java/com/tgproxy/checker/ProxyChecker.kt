@@ -169,7 +169,7 @@ object ProxyChecker {
                 // تنظیم SNI شبیه‌سازی شده در هدر کلاینت هلو برای عبور از DPI فیلترینگ
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
                     val sslParams = sslSocket.sslParameters
-                    sslParams.serverNames = listOf(java.net.SNIHostName(domain))
+                    sslParams.serverNames = listOf(javax.net.ssl.SNIHostName(domain))
                     sslSocket.sslParameters = sslParams
                 }
 
