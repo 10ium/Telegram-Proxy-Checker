@@ -23,7 +23,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -40,7 +39,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
-import java.io.OutputStreamWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -76,26 +74,11 @@ class MainActivity : ComponentActivity() {
 fun CheckerScreen() {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    
+    // راه‌اندازی ذخیره‌ساز محلی تنظیمات برای ماندگاری اطلاعات
+    val prefs = remember { context.getSharedPreferences("tg_proxy_checker_prefs", Context.MODE_PRIVATE) }
 
-    // متغیرهای حالت
-    var inputText by remember { mutableStateOf("") }
-    var concurrencyText by remember { mutableStateOf("50") }
-    var timeoutText by remember { mutableStateOf("5") }
-    var topNText by remember { mutableStateOf("5") }
-    var inputMode by remember { mutableStateOf(InputMode.PASTE) }
-
-    var isChecking by remember { mutableStateOf(false) }
-    var checkJob by remember { mutableStateOf<Job?>(null) }
-
-    val proxyList = remember { mutableStateListOf<ProxyItem>() }
-    val logsList = remember { mutableStateListOf<String>() }
-
-    // آمار زنده
-    var checkedCount by remember { mutableIntStateOf(0) }
-    var workingCount by remember { mutableIntStateOf(0) }
-    var failedCount by remember { mutableIntStateOf(0) }
-
-    // منابع اشتراک پیش‌فرض از داخل دستورات کاربر
+    // منابع اشتراک پیش‌فرض
     val defaultSubs = listOf(
         "https://raw.githubusercontent.com/10Dream/VpnClashFaCollector/refs/heads/main/sub/all/tg.txt",
         "https://raw.githubusercontent.com/10ium/VpnClashFaCollector/refs/heads/main/sub/all/tg.txt",
@@ -109,7 +92,42 @@ fun CheckerScreen() {
         "https://raw.githubusercontent.com/kort0881/telegram-proxy-collector/refs/heads/main/proxy_list.txt"
     )
 
-    var subscriptionLinksText by remember { mutableStateOf(defaultSubs.joinToString("\n")) }
+    // متغیرهای حالت متصل به SharedPreferences
+    var inputText by remember { mutableStateOf(prefs.getString("input_text", "") ?: "") }
+    var concurrencyText by remember { mutableStateOf(prefs.getString("concurrency", "50") ?: "50") }
+    var timeoutText by remember { mutableStateOf(prefs.getString("timeout", "5") ?: "5") }
+    var topNText by remember { mutableStateOf(prefs.getString("top_n", "5") ?: "5") }
+    var inputMode by remember { 
+        mutableStateOf(
+            try { 
+                InputMode.valueOf(prefs.getString("input_mode", InputMode.PASTE.name) ?: InputMode.PASTE.name) 
+            } catch(e: Exception) { 
+                InputMode.PASTE 
+            }
+        ) 
+    }
+    var subscriptionLinksText by remember { 
+        mutableStateOf(prefs.getString("sub_links", defaultSubs.joinToString("\n")) ?: defaultSubs.joinToString("\n")) 
+    }
+
+    // ذخیره خودکار تغییرات تنظیمات در زمان ویرایش کاربر
+    LaunchedEffect(inputText) { prefs.edit().putString("input_text", inputText).apply() }
+    LaunchedEffect(concurrencyText) { prefs.edit().putString("concurrency", concurrencyText).apply() }
+    LaunchedEffect(timeoutText) { prefs.edit().putString("timeout", timeoutText).apply() }
+    LaunchedEffect(topNText) { prefs.edit().putString("top_n", topNText).apply() }
+    LaunchedEffect(inputMode) { prefs.edit().putString("input_mode", inputMode.name).apply() }
+    LaunchedEffect(subscriptionLinksText) { prefs.edit().putString("sub_links", subscriptionLinksText).apply() }
+
+    var isChecking by remember { mutableStateOf(false) }
+    var checkJob by remember { mutableStateOf<Job?>(null) }
+
+    val proxyList = remember { mutableStateListOf<ProxyItem>() }
+    val logsList = remember { mutableStateListOf<String>() }
+
+    // آمار زنده
+    var checkedCount by remember { mutableIntStateOf(0) }
+    var workingCount by remember { mutableIntStateOf(0) }
+    var failedCount by remember { mutableIntStateOf(0) }
 
     // راه‌انداز فایل‌پیکر سیستم اندروید برای ایمپورت فایل متنی
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -392,7 +410,7 @@ fun CheckerScreen() {
             }
         }
 
-        // رندر کردن ویجت ورودی بر مبنای نوع انتخاب‌شده
+        // رندر کردن ویجت ورودی بر مبنای نوع انتخاب‌شده با برچسب‌های ثابت و رفع همپوشانی
         when (inputMode) {
             InputMode.PASTE -> {
                 Column {
@@ -420,7 +438,7 @@ fun CheckerScreen() {
                     OutlinedTextField(
                         value = inputText,
                         onValueChange = { inputText = it },
-                        label = { Text(stringResource(id = R.string.input_label)) },
+                        label = { Text("لیست پروکسی‌ها (هر پروکسی در یک خط)") },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(130.dp),
@@ -490,6 +508,20 @@ fun CheckerScreen() {
             ) {
                 Text(if (isChecking) stringResource(id = R.string.stop_btn) else stringResource(id = R.string.start_btn))
             }
+        }
+
+        // نمایش پیشرفت زنده تست
+        if (isChecking && proxyList.isNotEmpty()) {
+            val progress = checkedCount.toFloat() / proxyList.size.toFloat()
+            LinearProgressIndicator(
+                progress = progress,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp)
+                    .clip(RoundedCornerShape(4.dp)),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+            )
         }
 
         // بخش نمایش آمار تست‌ها
@@ -574,7 +606,7 @@ fun CheckerScreen() {
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // کپی تعداد مشخص از بهترین‌ها
+        // کپی تعداد مشخص از بهترین‌ها با طراحی کامپکت و عاری از به‌هم‌ریختگی
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -583,19 +615,22 @@ fun CheckerScreen() {
             OutlinedTextField(
                 value = topNText,
                 onValueChange = { if (it.all { char -> char.isDigit() }) topNText = it },
-                label = { Text(stringResource(id = R.string.copy_top_n)) },
+                label = { Text("تعداد برتر", fontSize = 10.sp) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.width(100.dp),
+                modifier = Modifier.width(90.dp),
                 singleLine = true
             )
-            val copyTopNLabel = stringResource(id = R.string.copy_top_n)
-            val copyAllLabel = stringResource(id = R.string.copy_all)
             Button(
                 onClick = { copyTopNToClipboard() },
                 modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B5CF6))
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B5CF6)),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
             ) {
-                Text("$copyTopNLabel $topNText ${copyAllLabel.substringAfter(" ")}")
+                Text(
+                    text = "کپی $topNText پروکسی برتر",
+                    fontSize = 12.sp,
+                    maxLines = 1
+                )
             }
         }
     }
