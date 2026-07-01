@@ -6,7 +6,11 @@ import kotlinx.coroutines.withContext
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
-import java.util.Locale
+import java.security.SecureRandom
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
+import java.security.MessageDigest
 
 enum class ProxyType { MTPROTO, SOCKS5 }
 
@@ -78,31 +82,153 @@ object ProxyChecker {
      */
     suspend fun checkSingleProxy(proxy: ProxyItem, timeoutMs: Int): ProxyItem = withContext(Dispatchers.IO) {
         proxy.status = "Checking"
-        val start = System.currentTimeMillis()
-        var socket: Socket? = null
         try {
             if (proxy.type == ProxyType.SOCKS5) {
                 // برای SOCKS5، یک اتصال واقعی از کانال پروکسی به سمت آی‌پی تلگرام برقرار می‌شود
                 val socksProxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress(proxy.host, proxy.port))
-                socket = Socket(socksProxy)
-                socket.connect(InetSocketAddress(TELEGRAM_TEST_IP, TELEGRAM_TEST_PORT), timeoutMs)
-                proxy.ping = System.currentTimeMillis() - start
-                proxy.status = "Working"
-            } else {
-                // برای پروکسی‌های MTProto، کانکشن مستقیم به خود سرور میزبان تست می‌شود
-                socket = Socket()
+                val socket = Socket()
+                val start = System.currentTimeMillis()
                 socket.connect(InetSocketAddress(proxy.host, proxy.port), timeoutMs)
+                
+                // برقراری سوکت از بستر پروکسی به مقصد دیتاسنتر آزمایشی تلگرام
+                val tunneledSocket = Socket(socksProxy)
+                tunneledSocket.connect(InetSocketAddress(TELEGRAM_TEST_IP, TELEGRAM_TEST_PORT), timeoutMs)
+                
                 proxy.ping = System.currentTimeMillis() - start
                 proxy.status = "Working"
+                try { tunneledSocket.close() } catch (ignored: Exception) {}
+                try { socket.close() } catch (ignored: Exception) {}
+            } else {
+                // برای پروکسی‌های MTProto، دست‌تکانی رمزگذاری شده واقعی و بومی برقرار می‌شود
+                val ping = performMtprotoHandshake(proxy.host, proxy.port, proxy.secret ?: "", timeoutMs)
+                if (ping > 0) {
+                    proxy.ping = ping
+                    proxy.status = "Working"
+                } else {
+                    proxy.status = "Failed"
+                    proxy.ping = -1
+                }
             }
         } catch (e: Exception) {
             proxy.status = "Failed"
             proxy.ping = -1
-        } finally {
-            try {
-                socket?.close()
-            } catch (ignored: Exception) {}
         }
         proxy
+    }
+
+    /**
+     * برقراری ارتباط با پکیج دست‌تکانی شبیه‌ساز رمزگذاری تلگرام (Obfuscated2)
+     */
+    private fun performMtprotoHandshake(host: String, port: Int, secretHex: String, timeoutMs: Int): Long {
+        val start = System.currentTimeMillis()
+        var socket: Socket? = null
+        try {
+            val rawSecret = parseSecret(secretHex)
+            if (rawSecret.size != 16) return -1
+
+            socket = Socket()
+            socket.connect(InetSocketAddress(host, port), timeoutMs)
+            socket.soTimeout = timeoutMs
+
+            // تولید بافر اولیه ۶۴ بایتی
+            val random = SecureRandom()
+            val initBuffer = ByteArray(64)
+            
+            while (true) {
+                random.nextBytes(initBuffer)
+                val val0 = initBuffer[0].toInt() and 0xFF
+                val val4 = (initBuffer[4].toInt() and 0xFF) or 
+                           (initBuffer[5].toInt() and 0xFF shl 8) or 
+                           (initBuffer[6].toInt() and 0xFF shl 16) or 
+                           (initBuffer[7].toInt() and 0xFF shl 24)
+                           
+                if (val0 != 0xef && val4 != 0x00000000 && val4 != 0xefefefef && val4 != 0x44444444) {
+                    break
+                }
+            }
+
+            // تنظیم پروتکل همگام‌سازی (Padded Intermediate)
+            initBuffer[56] = 0xdd.toByte()
+            initBuffer[57] = 0xdd.toByte()
+            initBuffer[58] = 0xdd.toByte()
+            initBuffer[59] = 0xdd.toByte()
+
+            // تنظیم شناسه دیتاسنتر آزمایشی (DC 2)
+            initBuffer[60] = 0xfe.toByte()
+            initBuffer[61] = 0xff.toByte()
+
+            // مشتق‌سازی کلید متقارن برای رمزگذاری هدر
+            val keyBytes = ByteArray(32)
+            System.arraycopy(initBuffer, 8, keyBytes, 0, 32)
+            
+            val md = MessageDigest.getInstance("SHA-256")
+            md.update(keyBytes)
+            md.update(rawSecret)
+            val encryptKey = md.digest()
+
+            val encryptIv = ByteArray(16)
+            System.arraycopy(initBuffer, 40, encryptIv, 0, 16)
+
+            // رمزگذاری بافر با الگوریتم AES-CTR
+            val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+            cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(encryptKey, "AES"), IvParameterSpec(encryptIv))
+            val encryptedInit = cipher.doFinal(initBuffer)
+
+            System.arraycopy(encryptedInit, 56, initBuffer, 56, 8)
+
+            // ارسال هدر به سمت پروکسی سرور
+            val out = socket.getOutputStream()
+            out.write(initBuffer)
+            out.flush()
+
+            // دریافت پاسخ ۶۴ بایتی معتبر از پروکسی
+            val input = socket.getInputStream()
+            val responseBuffer = ByteArray(64)
+            var bytesRead = 0
+            while (bytesRead < 64) {
+                val read = input.read(responseBuffer, bytesRead, 64 - bytesRead)
+                if (read == -1) break
+                bytesRead += read
+            }
+
+            if (bytesRead == 64) {
+                return System.currentTimeMillis() - start
+            }
+        } catch (e: Exception) {
+            // خطا
+        } finally {
+            try { socket?.close() } catch (ignored: Exception) {}
+        }
+        return -1
+    }
+
+    private fun parseSecret(secretHex: String): ByteArray {
+        val clean = secretHex.trim().lowercase()
+        val hex = if (clean.startsWith("ee") || clean.startsWith("dd")) {
+            if (clean.length >= 34) clean.substring(2, 34) else clean
+        } else {
+            clean
+        }
+        return hexToBytes(hex)
+    }
+
+    private fun hexToBytes(hex: String): ByteArray {
+        val l = hex.length
+        val data = ByteArray(l / 2)
+        var i = 0
+        try {
+            while (i < l) {
+                val firstDigit = Character.digit(hex[i], 16)
+                val secondDigit = Character.digit(hex[i + 1], 16)
+                if (firstDigit == -1 || secondDigit == -1) {
+                    return ByteArray(0)
+                }
+                data[i / 2] = ((firstDigit shl 4) + secondDigit).toByte()
+                i += 2
+            }
+        } catch (e: Exception) {
+            return ByteArray(0)
+        }
+        return data
     }
 }
