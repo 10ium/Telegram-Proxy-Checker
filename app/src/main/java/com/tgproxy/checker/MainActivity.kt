@@ -8,6 +8,8 @@ import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -44,6 +46,8 @@ import java.util.Date
 import java.util.Locale
 import com.tgproxy.checker.R
 
+enum class InputMode { PASTE, FILE, SUBS }
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -78,6 +82,7 @@ fun CheckerScreen() {
     var concurrencyText by remember { mutableStateOf("50") }
     var timeoutText by remember { mutableStateOf("5") }
     var topNText by remember { mutableStateOf("5") }
+    var inputMode by remember { mutableStateOf(InputMode.PASTE) }
 
     var isChecking by remember { mutableStateOf(false) }
     var checkJob by remember { mutableStateOf<Job?>(null) }
@@ -104,9 +109,51 @@ fun CheckerScreen() {
         "https://raw.githubusercontent.com/kort0881/telegram-proxy-collector/refs/heads/main/proxy_list.txt"
     )
 
+    var subscriptionLinksText by remember { mutableStateOf(defaultSubs.joinToString("\n")) }
+
+    // راه‌انداز فایل‌پیکر سیستم اندروید برای ایمپورت فایل متنی
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            coroutineScope.launch {
+                try {
+                    val contentResolver = context.contentResolver
+                    val inputStream = contentResolver.openInputStream(it)
+                    val text = inputStream?.bufferedReader()?.use { reader -> reader.readText() } ?: ""
+                    inputText = text
+                    Toast.makeText(context, "فایل متنی با موفقیت لود شد!", Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    Toast.makeText(context, "خطا در خواندن فایل: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
     fun appendLog(message: String) {
         val timeStamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
         logsList.add("[$timeStamp] $message")
+    }
+
+    // جایگذاری متن از کلیپ‌بورد سیستم
+    fun pasteFromClipboard() {
+        try {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            if (clipboard.hasPrimaryClip()) {
+                val item = clipboard.primaryClip?.getItemAt(0)
+                val pasteText = item?.text?.toString() ?: ""
+                if (pasteText.isNotEmpty()) {
+                    inputText = pasteText
+                    Toast.makeText(context, "متن با موفقیت جایگذاری شد!", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "کلیپ‌بورد فاقد متن است!", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                Toast.makeText(context, "کلیپ‌بورد خالی است!", Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: Exception) {
+            Toast.makeText(context, "خطا در دسترسی به کلیپ‌بورد: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+        }
     }
 
     // متد شروع تایید همزمان پروکسی‌ها
@@ -144,7 +191,6 @@ fun CheckerScreen() {
                         if (!isChecking) return@launch
                         val result = ProxyChecker.checkSingleProxy(proxy, timeoutMs)
                         
-                        // یافتن و آپدیت آیتم در لیست ری‌اکتیو جهت نمایش در UI
                         val index = proxyList.indexOfFirst { it.host == result.host && it.port == result.port }
                         if (index != -1) {
                             proxyList[index] = result
@@ -172,12 +218,17 @@ fun CheckerScreen() {
         appendLog("Verification stopped by user.")
     }
 
-    // لود لینک‌های اشتراک در ورودی
-    fun loadDefaultSubscriptions() {
+    // لود لینک‌های اشتراک از کادر قابل ویرایش
+    fun loadSubscriptions() {
+        val links = subscriptionLinksText.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
+        if (links.isEmpty()) {
+            Toast.makeText(context, "لیست لینک‌های اشتراک خالی است!", Toast.LENGTH_SHORT).show()
+            return
+        }
         coroutineScope.launch {
-            appendLog("Fetching default subscription links...")
+            appendLog("Fetching subscription links...")
             val fetchedProxies = mutableListOf<String>()
-            defaultSubs.forEach { subUrl ->
+            links.forEach { subUrl ->
                 val list = SubscriptionFetcher.fetchSubscription(subUrl) { msg ->
                     appendLog(msg)
                 }
@@ -186,20 +237,22 @@ fun CheckerScreen() {
             if (fetchedProxies.isNotEmpty()) {
                 inputText = fetchedProxies.joinToString("\n")
                 appendLog("Loaded ${fetchedProxies.size} proxies from sub links.")
+                // سوئیچ خودکار به تب اول برای ادیت پروکسی‌ها
+                inputMode = InputMode.PASTE
             } else {
                 appendLog("No fresh proxies found in sub links (within last 7 days).")
             }
         }
     }
 
-    // متدهای مربوط به کپی و خروجی
+    // متدهای مربوط به کپی و خروجی با الگو دو خط فاصله جدید
     fun copyAllToClipboard() {
         val working = proxyList.filter { it.status == "Working" }.sortedBy { it.ping }
         if (working.isEmpty()) {
             Toast.makeText(context, context.getString(R.string.toast_empty), Toast.LENGTH_SHORT).show()
             return
         }
-        val text = working.joinToString("\n") { it.originalUrl }
+        val text = working.joinToString("\n\n") { it.originalUrl }
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("working_proxies", text))
         Toast.makeText(context, context.getString(R.string.toast_copied), Toast.LENGTH_SHORT).show()
@@ -212,7 +265,7 @@ fun CheckerScreen() {
             Toast.makeText(context, context.getString(R.string.toast_empty), Toast.LENGTH_SHORT).show()
             return
         }
-        val text = working.joinToString("\n") { it.originalUrl }
+        val text = working.joinToString("\n\n") { it.originalUrl }
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("top_n_proxies", text))
         Toast.makeText(context, "${context.getString(R.string.toast_copied)} (Top $n)", Toast.LENGTH_SHORT).show()
@@ -224,7 +277,7 @@ fun CheckerScreen() {
             Toast.makeText(context, context.getString(R.string.toast_empty), Toast.LENGTH_SHORT).show()
             return
         }
-        val text = working.joinToString("\n") { it.originalUrl }
+        val text = working.joinToString("\n\n") { it.originalUrl }
         try {
             val intent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"
@@ -258,7 +311,7 @@ fun CheckerScreen() {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 8.dp),
+                .padding(bottom = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             OutlinedTextField(
@@ -279,27 +332,114 @@ fun CheckerScreen() {
             )
         }
 
-        // باکس دریافت اشتراک‌های پیش‌فرض
-        Button(
-            onClick = { loadDefaultSubscriptions() },
+        // نوار انتخاب سه حالته ورودی‌ها با فیلتر چیپ‌ها
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 8.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                .padding(bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(stringResource(id = R.string.load_subs_btn))
+            val modes = listOf(
+                InputMode.PASTE to "کلیپ‌بورد / متن",
+                InputMode.FILE to "انتخاب فایل",
+                InputMode.SUBS to "لینک‌های اشتراک"
+            )
+            modes.forEach { (mode, label) ->
+                val isSelected = inputMode == mode
+                FilterChip(
+                    selected = isSelected,
+                    onClick = { inputMode = mode },
+                    label = { Text(label, fontSize = 11.sp, fontWeight = FontWeight.Medium) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                        selectedLabelColor = Color.White
+                    ),
+                    modifier = Modifier.weight(1f)
+                )
+            }
         }
 
-        // ادیت باکس ورودی لیست خام پروکسی‌ها
-        OutlinedTextField(
-            value = inputText,
-            onValueChange = { inputText = it },
-            label = { Text(stringResource(id = R.string.input_label)) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(130.dp),
-            maxLines = 1000
-        )
+        // رندر کردن ویجت ورودی بر مبنای نوع انتخاب‌شده
+        when (inputMode) {
+            InputMode.PASTE -> {
+                Column {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { pasteFromClipboard() },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                        ) {
+                            Text("جایگذاری از کلیپ‌بورد", fontSize = 11.sp)
+                        }
+                        Button(
+                            onClick = { inputText = "" },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444))
+                        ) {
+                            Text("پاک کردن متن", fontSize = 11.sp)
+                        }
+                    }
+                    OutlinedTextField(
+                        value = inputText,
+                        onValueChange = { inputText = it },
+                        label = { Text(stringResource(id = R.string.input_label)) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(130.dp),
+                        maxLines = 1000
+                    )
+                }
+            }
+            InputMode.FILE -> {
+                Column {
+                    Button(
+                        onClick = { filePickerLauncher.launch("text/*") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Text("انتخاب فایل متنی (.txt)", fontSize = 13.sp)
+                    }
+                    OutlinedTextField(
+                        value = inputText,
+                        onValueChange = { inputText = it },
+                        label = { Text("لیست پروکسی‌های بارگذاری شده از فایل") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(130.dp),
+                        maxLines = 1000
+                    )
+                }
+            }
+            InputMode.SUBS -> {
+                Column {
+                    Button(
+                        onClick = { loadSubscriptions() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Text(stringResource(id = R.string.load_subs_btn), fontSize = 13.sp)
+                    }
+                    OutlinedTextField(
+                        value = subscriptionLinksText,
+                        onValueChange = { subscriptionLinksText = it },
+                        label = { Text("لینک‌های اشتراک پروکسی (قابل ویرایش)") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(130.dp),
+                        maxLines = 1000
+                    )
+                }
+            }
+        }
 
         // دکمه کنترل عملیات
         Row(
