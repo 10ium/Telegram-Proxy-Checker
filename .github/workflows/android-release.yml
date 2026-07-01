@@ -29,7 +29,17 @@ jobs:
 
       - name: Setup Gradle Environment
         run: |
-          # جستجوی پویای فایل gradlew در کل ساختار دایرکتوری مخزن شما
+          # جستجوی پویای فایل تنظیمات توزیع گریدل در پروژه
+          WRAPPER_PROPERTIES=$(find . -name "gradle-wrapper.properties" | head -n 1)
+          
+          if [ -n "$WRAPPER_PROPERTIES" ]; then
+            echo "Modifying existing gradle-wrapper.properties to use stable Gradle 8.7..."
+            # تغییر آدرس توزیع گریدل به نسخه پایدار و کاملاً سازگار 8.7
+            sed -i 's/distributions\/gradle-.*-bin.zip/distributions\/gradle-8.7-bin.zip/g' "$WRAPPER_PROPERTIES"
+            sed -i 's/distributions\/gradle-.*-all.zip/distributions\/gradle-8.7-all.zip/g' "$WRAPPER_PROPERTIES"
+          fi
+
+          # جستجوی پویای فایل اجرای گریدل (gradlew) در کل ساختار دایرکتوری مخزن شما
           GRADLEW_PATH=$(find . -name "gradlew" | head -n 1)
           if [ -n "$GRADLEW_PATH" ]; then
             echo "Found gradlew at: $GRADLEW_PATH"
@@ -37,8 +47,9 @@ jobs:
             GRADLE_DIR=$(dirname "$GRADLEW_PATH")
             echo "GRADLE_DIR=$GRADLE_DIR" >> $GITHUB_ENV
           else
-            echo "gradlew not found in repository. Generating wrapper using system gradle..."
-            gradle wrapper
+            echo "gradlew not found in repository. Generating wrapper using system gradle with stable version 8.7..."
+            # تولید مجدد Wrapper با قید صریح نسخه سازگار و باثبات 8.7
+            gradle wrapper --gradle-version 8.7
             chmod +x gradlew
             echo "GRADLE_DIR=." >> $GITHUB_ENV
           fi
@@ -51,7 +62,7 @@ jobs:
       - name: Find Unsigned Release APK
         id: find-apk
         run: |
-          # پیدا کردن فایل APK نهایی بدون محدودیت سخت‌گیرانه ساختار پوشه‌بندی
+          # پیدا کردن فایل APK نهایی بدون محدودیت ساختار پوشه‌بندی
           APK_PATH=$(find . -path "*/build/outputs/apk/release/*.apk" ! -name "*signed*" | head -n 1)
           if [ -z "$APK_PATH" ]; then
             echo "Error: No release APK found!"
