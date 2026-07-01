@@ -99,10 +99,10 @@ object ProxyChecker {
                 try { tunneledSocket.close() } catch (ignored: Exception) {}
                 try { socket.close() } catch (ignored: Exception) {}
             } else {
-                // برای پروکسی‌های MTProto، دست‌تکانی رمزگذاری شده واقعی و بومی برقرار می‌شود
-                val ping = performMtprotoHandshake(proxy.host, proxy.port, proxy.secret ?: "", timeoutMs)
-                if (ping > 0) {
-                    proxy.ping = ping
+                // برای پروکسی‌های MTProto، تست اتصال با پروتکل رمزگذاری‌شده بومی انجام می‌شود
+                val resultPing = checkMtProtoProxy(proxy, timeoutMs)
+                if (resultPing > 0L) {
+                    proxy.ping = resultPing
                     proxy.status = "Working"
                 } else {
                     proxy.status = "Failed"
@@ -117,14 +117,14 @@ object ProxyChecker {
     }
 
     /**
-     * برقراری ارتباط با پکیج دست‌تکانی شبیه‌ساز رمزگذاری تلگرام (Obfuscated2)
+     * دست‌تکانی شبیه‌ساز رمزگذاری تلگرام (Obfuscated2) با هندل صحیح تایپ‌های ریاضی
      */
-    private fun performMtprotoHandshake(host: String, port: Int, secretHex: String, timeoutMs: Int): Long {
+    private fun checkMtProtoProxy(host: String, port: Int, secretHex: String, timeoutMs: Int): Long {
         val start = System.currentTimeMillis()
         var socket: Socket? = null
         try {
             val rawSecret = parseSecret(secretHex)
-            if (rawSecret.size != 16) return -1
+            if (rawSecret.size != 16) return -1L
 
             socket = Socket()
             socket.connect(InetSocketAddress(host, port), timeoutMs)
@@ -142,7 +142,8 @@ object ProxyChecker {
                            (initBuffer[6].toInt() and 0xFF shl 16) or 
                            (initBuffer[7].toInt() and 0xFF shl 24)
                            
-                if (val0 != 0xef && val4 != 0x00000000 && val4 != 0xefefefef && val4 != 0x44444444) {
+                // اعمال تبدیل .toInt() روی مقادیر هگزادسیمال بزرگ جهت تطبیق نوع داده ریاضی
+                if (val0 != 0xef && val4 != 0x00000000 && val4 != 0xefefefef.toInt() && val4 != 0x44444444) {
                     break
                 }
             }
@@ -199,7 +200,7 @@ object ProxyChecker {
         } finally {
             try { socket?.close() } catch (ignored: Exception) {}
         }
-        return -1
+        return -1L
     }
 
     private fun parseSecret(secretHex: String): ByteArray {
