@@ -1,115 +1,101 @@
-name: Generate Android Release
+name: Build and Sign Android Release
 
 on:
-  workflow_dispatch: # امکان اجرای دستی از تب Actions در گیت‌هاب
   push:
     tags:
-      - 'v*' # اجرای خودکار در صورت ثبت تگ جدید مثل v1.0.1
+      - 'v*' # اجرای گردش کار با ثبت تگ‌های نسخه (به عنوان مثال v1.0.0)
+  workflow_dispatch: # فعال‌سازی امکان راه‌اندازی دستی در منوی گیت‌هاب اکشنز
 
 permissions:
-  contents: write
+  contents: write # پیش‌نیاز مجازسازی ایجاد ریلیز و آپلود فایل‌های اجرایی
 
 jobs:
   build:
+    name: Build & Sign APK
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Set up JDK 17
+      - name: Set up JDK
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
           cache: 'gradle'
 
-      - name: Generate and Set Up Gradle Wrapper
-        run: |
-          # تولید اجباری و تضمینی گریدل نسخه 8.5 سازگار با پلاگین اندروید 8.2.2
-          echo "Generating Gradle wrapper with compatible version 8.5..."
-          gradle wrapper --gradle-version 8.5
-          chmod +x gradlew
-
-      - name: Update Versioning in Build Gradle
-        run: |
-          # جایگزینی کدهای نسخه‌گذاری پیش‌فرض با مقادیر داینامیک گیت‌هاب جهت خوانایی سیستم Obtainium
-          RUN_NUMBER="${{ github.run_number }}"
-          sed -i "s/versionCode = 1/versionCode = $RUN_NUMBER/g" app/build.gradle.kts
-          sed -i "s/versionName = \"1.0.0\"/versionName = \"1.0.$RUN_NUMBER\"/g" app/build.gradle.kts
-          echo "Building Version: 1.0.$RUN_NUMBER (Code: $RUN_NUMBER)"
+      - name: Grant Execute Permission to Gradlew
+        run: chmod +x gradlew
 
       - name: Build Release APK
         run: ./gradlew assembleRelease --no-daemon
 
-      - name: Prepare Keystore File
-        shell: python
+      - name: Find Unsigned Release APK
+        id: find-apk
+        run: |
+          # جستجو جهت یافتن فایل خام ریلیز که توسط گریدل کامپایل شده است
+          APK_PATH=$(find app/build/outputs/apk/release/ -name "*.apk" ! -name "*signed*" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            echo "Error: No APK found!"
+            exit 1
+          fi
+          echo "Found APK at: $APK_PATH"
+          echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
+
+      - name: Decode Keystore
+        id: decode-keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          # متد کاملاً داینامیک و ضد خطا: بررسی وجود سکرت در گیت‌هاب و تولید کلید در صورت عدم وجود آن
-          import base64
-          import os
-          import subprocess
+          # حذف شکستگی خطوط و کاراکترهای مخفی و دکود مستقیم به فایل باینری
+          echo "$KEYSTORE_BASE64" | tr -d '\r \n' | base64 --decode > app/release-key.jks
+          if [ ! -s app/release-key.jks ]; then
+            echo "Error: Decoded keystore is empty or corrupt!"
+            exit 1
+          fi
 
-          keystore_b64 = os.environ.get("KEYSTORE_BASE64", "").strip()
-
-          if keystore_b64:
-              print("KEYSTORE_BASE64 secret found! Decoding your persistent signing key...")
-              # حذف هرگونه فضای خالی متفرقه حاصل از خط فرمان
-              clean_b64 = "".join(keystore_b64.split())
-              with open("release.keystore", "wb") as f:
-                  f.write(base64.b64decode(clean_b64))
-          else:
-              print("KEYSTORE_BASE64 secret not found! Generating a temporary keystore on-the-fly to prevent build failure...")
-              # تولید داینامیک کلید امضا به صورت بومی با ابزار keytool رانر
-              cmd = [
-                  "keytool", "-genkey", "-v",
-                  "-keystore", "release.keystore",
-                  "-alias", "release",
-                  "-keyalg", "RSA",
-                  "-keysize", "2048",
-                  "-validity", "10000",
-                  "-storepass", "telegramchecker",
-                  "-keypass", "telegramchecker",
-                  "-dname", "CN=tgproxy, O=tgproxy, C=US"
-              ]
-              subprocess.run(cmd, check=True)
-
-      - name: Sign APK with apksigner
+      - name: Sign Release APK
+        id: sign-apk
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          # یافتن پویای ابزار رسمی apksigner در رانر اوبونتو
-          APKSIGNER_PATH=$(find $ANDROID_HOME/build-tools -name apksigner | sort -V | tail -n 1)
+          # موقعیت‌یابی خودکار ابزار رسمی apksigner بر اساس نسخه‌های نصب‌شده کیت اندروید
+          APKSIGNER_PATH=$(find $ANDROID_SDK_ROOT/build-tools/ -name "apksigner" | sort -V | tail -n 1)
+          if [ -z "$APKSIGNER_PATH" ]; then
+            echo "Error: apksigner not found in SDK build-tools!"
+            exit 1
+          fi
+          echo "Using apksigner: $APKSIGNER_PATH"
           
-          # امضا کردن خروجی گریدل با کلید معتبر
+          # استفاده از ارجاع متغیرها به فرمت env:VAR جهت جلوگیری از تداخل کاراکترهای خاص با لینوکس
           $APKSIGNER_PATH sign \
-            --ks release.keystore \
-            --ks-key-alias release \
-            --ks-pass pass:telegramchecker \
-            --key-pass pass:telegramchecker \
-            --out app-release-signed.apk \
-            app/build/outputs/apk/release/app-release-unsigned.apk
+            --ks app/release-key.jks \
+            --ks-pass env:KEYSTORE_PASSWORD \
+            --key-pass env:KEY_PASSWORD \
+            --ks-key-alias "$KEY_ALIAS" \
+            --out app/build/outputs/apk/release/Telegram-Proxy-Checker-Signed.apk \
+            ${{ env.APK_PATH }}
             
-          # بررسی درستی امضای دیجیتال
-          $APKSIGNER_PATH verify app-release-signed.apk
+          # راستی‌آزمایی یکپارچگی گواهی فایل امضا شده
+          $APKSIGNER_PATH verify --verbose app/build/outputs/apk/release/Telegram-Proxy-Checker-Signed.apk
 
-      - name: Create GitHub Release
-        id: create_release
+      - name: Create GitHub Release and Upload Signed APK
         uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
         with:
-          tag_name: "v1.0.${{ github.run_number }}"
-          name: "TG Proxy Checker v1.0.${{ github.run_number }}"
+          files: app/build/outputs/apk/release/Telegram-Proxy-Checker-Signed.apk
+          name: Telegram Proxy Checker ${{ github.ref_name }}
+          body: |
+            ### اطلاعات انتشار نسخه
+            - **نسخه انتشار**: `${{ github.ref_name }}`
+            - **وضعیت نسخه**: محصول امضا شده نهایی
+            - **اعتبارسنجی**: تایید شده با ابزار رسمی Android apksigner
           draft: false
           prerelease: false
-          body: |
-            ## Telegram Proxy Checker - v1.0.${{ github.run_number }}
-            
-            ### What's New:
-            - Fully upgraded Kotlin codebase with highly optimized low-level TCP sockets.
-            - Auto-updating mechanism compatible with **Obtainium**.
-            - Built-in multi-threaded verification with custom Concurrency and Timeout options.
-            - Automatic filtration of old/dead subscription links (> 7 days stale).
-            
-            **Installation Note:** This APK is signed with a persistent signature key. You can install it on top of any previous version from this repository without uninstalling.
-          files: |
-            app-release-signed.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
