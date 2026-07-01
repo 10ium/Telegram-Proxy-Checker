@@ -293,6 +293,22 @@ fun CheckerScreen() {
         Toast.makeText(context, "${context.getString(R.string.toast_copied)} (Top $n)", Toast.LENGTH_SHORT).show()
     }
 
+    // ارسال مستقیم بهترین پروکسی تست شده به تلگرام
+    fun connectToBestProxy() {
+        val best = proxyList.filter { it.status == "Working" }.sortedBy { it.ping }.firstOrNull()
+        if (best == null) {
+            Toast.makeText(context, "هیچ پروکسی فعالی یافت نشد! ابتدا تست را آغاز کنید.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(best.originalUrl))
+            context.startActivity(intent)
+            Toast.makeText(context, "هدایت به تلگرام... (پینگ: ${best.ping}ms)", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(context, "خطا در باز کردن تلگرام: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     fun exportAsTxt() {
         val working = proxyList.filter { it.status == "Working" }.sortedBy { it.ping }
         if (working.isEmpty()) {
@@ -606,6 +622,22 @@ fun CheckerScreen() {
             ) {
                 Text(stringResource(id = R.string.export_file), fontSize = 11.sp)
             }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // دکمه جدید: اتصال مستقیم به بهترین پروکسی با تفکیک رنگ و موقعیت مستقل و چشم‌نواز
+        Button(
+            onClick = { connectToBestProxy() },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D9BF0)) // Telegram Blue
+        ) {
+            Text(
+                text = "🚀 اتصال مستقیم به بهترین پروکسی (کمترین پینگ)",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
         }
 
         Spacer(modifier = Modifier.height(8.dp))
