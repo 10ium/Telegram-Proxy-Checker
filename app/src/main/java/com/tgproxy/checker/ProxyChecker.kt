@@ -252,17 +252,7 @@ object ProxyChecker {
             out.write(initBuffer)
             out.flush()
 
-            // دریافت هدر هندی‌شیک پاسخ سرور (۶۴ بایت)
-            val input = socketToUse.getInputStream()
-            val responseBuffer = ByteArray(64)
-            var bytesRead = 0
-            while (bytesRead < 64) {
-                val read = input.read(responseBuffer, bytesRead, 64 - bytesRead)
-                if (read == -1) return -1L
-                bytesRead += read
-            }
-
-            // استخراج کلید و بردار رمزی معکوس برای دریافت (Decryption)
+            // استخراج کلید و بردار رمزی معکوس برای دریافت کلاینت (Decryption)
             val decryptKeyBytes = ByteArray(32)
             for (i in 0..31) {
                 decryptKeyBytes[i] = initBuffer[55 - i]
@@ -281,18 +271,9 @@ object ProxyChecker {
                 init(Cipher.DECRYPT_MODE, SecretKeySpec(decryptKey, "AES"), IvParameterSpec(decryptIv))
             }
 
-            // رفع باگ بحرانی: رمزگشایی هندی‌شیک سرور باید دقیقاً از آفست ۵۶ شروع شود تا همگام‌سازی کلید AES خراب نشود
-            val decrypted8 = decryptCipher.update(responseBuffer, 56, 8)
-            System.arraycopy(decrypted8, 0, responseBuffer, 56, 8)
-
-            // راستی‌آزمایی پروتکل هندی‌شیک پاسخ پروکسی (باید 0xdd, 0xee یا 0xef باشد)
-            val protoByte = responseBuffer[56]
-            if (protoByte != 0xdd.toByte() && protoByte != 0xee.toByte() && protoByte != 0xef.toByte()) {
-                return -1L
-            }
-            if (responseBuffer[57] != protoByte || responseBuffer[58] != protoByte || responseBuffer[59] != protoByte) {
-                return -1L
-            }
+            // اصلاح بسیار مهم: سرورهای MTProxy هیچ نوع هدر یا هندی‌شیک ۶۴ بایتی بازنمی‌گردانند!
+            // سرور مستقیماً منتظر دریافت اولین فریم تراکنش رمزنگاری کلاینت می‌ماند.
+            // بنابراین مستقیماً وارد فاز ارسال درخواست req_pq_multi می‌شویم.
 
             // --- ارسال درخواست req_pq_multi برای راستی‌آزمایی در سطح دیتاسنترهای تلگرام ---
             val msgId = ((System.currentTimeMillis() / 1000) shl 32) and -4L
@@ -329,6 +310,9 @@ object ProxyChecker {
             val encryptedFrame = encryptCipher.update(frame)
             out.write(encryptedFrame)
             out.flush()
+
+            // اکنون منتظر بایت‌های پاسخ رمزنگاری‌شده واقعی سرور می‌مانیم
+            val input = socketToUse.getInputStream()
 
             // خواندن هدر فریم دریافتی (۴ بایت طول فریم)
             val lenBuffer = ByteArray(4)
