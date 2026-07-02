@@ -125,30 +125,23 @@ object ProxyChecker {
     }
 
     /**
-     * تست بومی کانکشن پروکسی بهینه‌سازی شده با سوکت‌های سطح پایین جاوا و تایید نهایی منطبق با Go
+     * تست بومی کانکشن پروکسی بهینه‌سازی شده با سوکت‌های سطح پایین جاوا
      */
     suspend fun checkSingleProxy(proxy: ProxyItem, timeoutMs: Int): ProxyItem = withContext(Dispatchers.IO) {
         proxy.status = "Checking"
-        var socket: Socket? = null
         try {
-            // فاز ۱: تست سریع اتصال TCP با تایم‌اوت ۱۵۰۰ میلی‌ثانیه مطابق منطق بهینه Go
-            socket = Socket()
-            socket.connect(InetSocketAddress(proxy.host, proxy.port), 1500)
-            socket.close()
-            socket = null
-
-            // فاز ۲: بررسی عمیق صحت پروتکل
             if (proxy.type == ProxyType.SOCKS5) {
                 val start = System.currentTimeMillis()
                 
-                // تونل کردن سوکت SOCKS5 به دیتاسنتر واقعی تلگرام
+                // اتصال مستقیم و تونل کردن سوکت SOCKS5 به دیتاسنتر واقعی تلگرام
                 val socksProxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress(proxy.host, proxy.port))
-                socket = Socket(socksProxy)
+                val socket = Socket(socksProxy)
                 socket.soTimeout = timeoutMs
                 socket.connect(InetSocketAddress(TELEGRAM_TEST_IP, TELEGRAM_TEST_PORT), timeoutMs)
                 
                 proxy.ping = System.currentTimeMillis() - start
                 proxy.status = "Working"
+                try { socket.close() } catch (ignored: Exception) {}
             } else {
                 // تست دقیق MTProto با شبیه‌سازی handshake و ارسال پکت req_pq_multi به DC واقعی
                 val resultPing = checkMtProtoProxy(proxy.host, proxy.port, proxy.secret ?: "", timeoutMs)
@@ -163,8 +156,6 @@ object ProxyChecker {
         } catch (e: Exception) {
             proxy.status = "Failed"
             proxy.ping = -1
-        } finally {
-            try { socket?.close() } catch (ignored: Exception) {}
         }
         proxy
     }
@@ -226,15 +217,15 @@ object ProxyChecker {
                 }
             }
 
-            // استفاده از پروتکل استاندارد Intermediate (0xeeeeeeee)
-            initBuffer[56] = 0xee.toByte()
-            initBuffer[57] = 0xee.toByte()
-            initBuffer[58] = 0xee.toByte()
-            initBuffer[59] = 0xee.toByte()
+            // استفاده از پروتکل استاندارد Padded-Intermediate (0xdddddddd) برای پشتیبانی حداکثری پروکسی‌ها
+            initBuffer[56] = 0xdd.toByte()
+            initBuffer[57] = 0xdd.toByte()
+            initBuffer[58] = 0xdd.toByte()
+            initBuffer[59] = 0xdd.toByte()
 
-            // هدایت به دیتاسنتر ۴ تولیدی تلگرام (DC 4 Production، به صورت little-endian: 0x04 0x00)
-            initBuffer[60] = 0x04.toByte()
-            initBuffer[61] = 0x00.toByte()
+            // هدایت به دیتاسنتر ۲ تولیدی تلگرام (DC 2 Production، به صورت علامت‌دار و لیتل-اندین: -2 معادل 0xfe 0xff)
+            initBuffer[60] = 0xfe.toByte()
+            initBuffer[61] = 0xff.toByte()
 
             // استخراج کلید و بردار رمزی فرستنده (Encryption)
             val keyBytes = ByteArray(32)
@@ -290,18 +281,20 @@ object ProxyChecker {
                 init(Cipher.DECRYPT_MODE, SecretKeySpec(decryptKey, "AES"), IvParameterSpec(decryptIv))
             }
 
-            val decryptedResponse = decryptCipher.update(responseBuffer)
+            // رفع باگ بحرانی: رمزگشایی هندی‌شیک سرور باید دقیقاً از آفست ۵۶ شروع شود تا همگام‌سازی کلید AES خراب نشود
+            val decrypted8 = decryptCipher.update(responseBuffer, 56, 8)
+            System.arraycopy(decrypted8, 0, responseBuffer, 56, 8)
 
-            // راستی‌آزمایی پروتکل Intermediate هندی‌شیک پاسخ پروکسی (باید 0xee باشد)
-            val protoByte = decryptedResponse[56]
-            if (protoByte != 0xee.toByte()) {
+            // راستی‌آزمایی پروتکل هندی‌شیک پاسخ پروکسی (باید 0xdd, 0xee یا 0xef باشد)
+            val protoByte = responseBuffer[56]
+            if (protoByte != 0xdd.toByte() && protoByte != 0xee.toByte() && protoByte != 0xef.toByte()) {
                 return -1L
             }
-            if (decryptedResponse[57] != protoByte || decryptedResponse[58] != protoByte || decryptedResponse[59] != protoByte) {
+            if (responseBuffer[57] != protoByte || responseBuffer[58] != protoByte || responseBuffer[59] != protoByte) {
                 return -1L
             }
 
-            // --- ارسال درخواست req_pq_multi برای راستی‌آزمایی ۱۰۰٪ در سطح هسته تلگرام ---
+            // --- ارسال درخواست req_pq_multi برای راستی‌آزمایی در سطح دیتاسنترهای تلگرام ---
             val msgId = ((System.currentTimeMillis() / 1000) shl 32) and -4L
             val nonce = ByteArray(16).apply { random.nextBytes(this) }
             
@@ -319,11 +312,17 @@ object ProxyChecker {
                 put(tlBody)
             }.array()
 
-            // بسته‌بندی بر مبنای فریم Intermediate: [اندازه دیتا: ۴ بایت] [دیتا]
-            val frame = ByteBuffer.allocate(4 + unencryptedMsg.size).apply {
+            // بسته‌بندی بر مبنای فریم Padded-Intermediate: [اندازه دیتا: ۴ بایت] [دیتا] [پدینگ رندوم]
+            val payload = unencryptedMsg
+            val paddingLen = 4
+            val padding = ByteArray(paddingLen).apply { random.nextBytes(this) }
+            val totalLength = payload.size + paddingLen
+
+            val frame = ByteBuffer.allocate(4 + totalLength).apply {
                 order(ByteOrder.LITTLE_ENDIAN)
-                putInt(unencryptedMsg.size)
-                put(unencryptedMsg)
+                putInt(totalLength)
+                put(payload)
+                put(padding)
             }.array()
 
             // رمزنگاری فریم و ارسال به سوکت
@@ -368,7 +367,6 @@ object ProxyChecker {
             val responseConstructorId = wrapBuffer.getInt(20)
             
             if (responseConstructorId == 0x05162463) { // resPQ شناسه سازنده تایید موفق تلگرام
-                // پروکسی کاملا سالم است و دست‌تکانی نهایی با هسته مرکزی تلگرام با موفقیت انجام شد
                 return System.currentTimeMillis() - start
             }
 
@@ -393,7 +391,6 @@ object ProxyChecker {
     private fun hexToBytes(hex: String): ByteArray {
         val l = hex.length
         if (l % 2 != 0) {
-            // پشتیبانی از دکودر Base64 در زمان خطا دار بودن فرمت هگز (مطابق منطق Go)
             return try {
                 android.util.Base64.decode(hex, android.util.Base64.DEFAULT or android.util.Base64.NO_PADDING or android.util.Base64.URL_SAFE)
             } catch (e: Exception) {
@@ -407,7 +404,6 @@ object ProxyChecker {
                 val firstDigit = Character.digit(hex[i], 16)
                 val secondDigit = Character.digit(hex[i + 1], 16)
                 if (firstDigit == -1 || secondDigit == -1) {
-                    // بک‌آپ دکودر Base64
                     return android.util.Base64.decode(hex, android.util.Base64.DEFAULT or android.util.Base64.NO_PADDING or android.util.Base64.URL_SAFE)
                 }
                 data[i / 2] = ((firstDigit shl 4) + secondDigit).toByte()
