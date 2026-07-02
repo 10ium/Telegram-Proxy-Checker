@@ -18,6 +18,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -110,6 +112,9 @@ fun CheckerScreen() {
         mutableStateOf(prefs.getString("sub_links", defaultSubs.joinToString("\n")) ?: defaultSubs.joinToString("\n")) 
     }
 
+    // متغیر حالت مدیریت تب‌های برنامه
+    var selectedTab by remember { mutableIntStateOf(0) }
+
     // ذخیره خودکار تغییرات تنظیمات در زمان ویرایش کاربر
     LaunchedEffect(inputText) { prefs.edit().putString("input_text", inputText).apply() }
     LaunchedEffect(concurrencyText) { prefs.edit().putString("concurrency", concurrencyText).apply() }
@@ -180,7 +185,7 @@ fun CheckerScreen() {
         val timeoutSec = timeoutText.toIntOrNull() ?: 5
         val timeoutMs = timeoutSec * 1000
 
-        // استخراج و یکتاسازی هوشمند پروکسی‌ها از متن ورودی (فارغ از ساختار نامنظم متون)
+        // استخراج و یکتاسازی هوشمند پروکسی‌ها از متن ورودی
         val parsedList = ProxyChecker.extractProxiesFromText(inputText)
 
         if (parsedList.isEmpty()) {
@@ -201,6 +206,9 @@ fun CheckerScreen() {
         failedCount = 0
         logsList.clear()
         isChecking = true
+        
+        // سوئیچ خودکار به تب لاگ‌ها و پیشرفت جهت جلوگیری از کوچکی نمایش کاربری
+        selectedTab = 1
 
         appendLog("Extracted ${parsedList.size} unique proxies (Skipped $skippedDuplicates duplicate/invalid items).")
         appendLog("Starting verify process...")
@@ -213,7 +221,7 @@ fun CheckerScreen() {
                         if (!isChecking) return@launch
                         val result = ProxyChecker.checkSingleProxy(proxy, timeoutMs)
                         
-                        val index = proxyList.indexOfFirst { it.host == result.host && it.port == result.port }
+                        val index = proxyList.indexOfFirst { it.host == result.host && it.port == result.port && it.secret == result.secret }
                         if (index != -1) {
                             proxyList[index] = result
                         }
@@ -240,7 +248,7 @@ fun CheckerScreen() {
         appendLog("Verification stopped by user.")
     }
 
-    // لود لینک‌های اشتراک از کادر قابل ویرایش (تنها این بخش خط‌به‌خط است)
+    // لود لینک‌های اشتراک از کادر قابل ویرایش
     fun loadSubscriptions() {
         val links = subscriptionLinksText.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
         if (links.isEmpty()) {
@@ -262,7 +270,7 @@ fun CheckerScreen() {
                 // سوئیچ خودکار به تب اول برای ادیت پروکسی‌ها
                 inputMode = InputMode.PASTE
             } else {
-                appendLog("No fresh proxies found in sub links (within last 7 days).")
+                appendLog("No fresh proxies found in sub links.")
             }
         }
     }
@@ -331,342 +339,399 @@ fun CheckerScreen() {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp)
+            .padding(top = 16.dp)
     ) {
         // هدر برنامه
         Text(
             text = stringResource(id = R.string.title),
-            fontSize = 20.sp,
+            fontSize = 18.sp,
             fontWeight = FontWeight.Bold,
             color = Color.White,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 6.dp),
+                .padding(bottom = 8.dp),
             textAlign = TextAlign.Center
         )
 
-        // بخش گرافیکی دعوت به کانال تلگرام حامی برنامه
-        Card(
-            onClick = {
-                try {
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/vpnclashfa"))
-                    context.startActivity(intent)
-                } catch (e: Exception) {
-                    Toast.makeText(context, "خطا در باز کردن تلگرام: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
-                }
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 12.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1D9BF0).copy(alpha = 0.15f)),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF1D9BF0))
+        // طراحی نوار تب‌های بالا برای جلوگیری از فشرده‌سازی لایه‌ها
+        TabRow(
+            selectedTabIndex = selectedTab,
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = Color.White
         ) {
-            Row(
+            Tab(
+                selected = selectedTab == 0,
+                onClick = { selectedTab = 0 },
+                text = { Text("ورودی و تنظیمات", fontSize = 13.sp, fontWeight = FontWeight.Bold) }
+            )
+            Tab(
+                selected = selectedTab == 1,
+                onClick = { selectedTab = 1 },
+                text = { Text("مانیتور و لاگ‌ها", fontSize = 13.sp, fontWeight = FontWeight.Bold) }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // محتوای تب اول: پیکربندی و کادرهای ورودی اطلاعات
+        if (selectedTab == 0) {
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 8.dp, horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
+                    .weight(1f)
+                    .padding(horizontal = 16.dp)
+                    .verticalScroll(rememberScrollState())
             ) {
-                Text(
-                    text = "📢 عضویت در کانال تلگرام vpnclashfa",
-                    color = Color(0xFF60A5FA),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center
-                )
-            }
-        }
-
-        // ردیف تنظیمات: همزمانی و تایم اوت
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            OutlinedTextField(
-                value = concurrencyText,
-                onValueChange = { if (it.all { char -> char.isDigit() }) concurrencyText = it },
-                label = { Text(stringResource(id = R.string.placeholder_concurrency)) },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.weight(1f),
-                singleLine = true
-            )
-            OutlinedTextField(
-                value = timeoutText,
-                onValueChange = { if (it.all { char -> char.isDigit() }) timeoutText = it },
-                label = { Text(stringResource(id = R.string.placeholder_timeout)) },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.weight(1f),
-                singleLine = true
-            )
-        }
-
-        // نوار انتخاب سه حالته ورودی‌ها با فیلتر چیپ‌ها
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            val modes = listOf(
-                InputMode.PASTE to "کلیپ‌بورد / متن",
-                InputMode.FILE to "انتخاب فایل",
-                InputMode.SUBS to "لینک‌های اشتراک"
-            )
-            modes.forEach { (mode, label) ->
-                val isSelected = inputMode == mode
-                FilterChip(
-                    selected = isSelected,
-                    onClick = { inputMode = mode },
-                    label = { Text(label, fontSize = 11.sp, fontWeight = FontWeight.Medium) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.primary,
-                        selectedLabelColor = Color.White
-                    ),
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
-
-        // رندر کردن ویجت ورودی بر مبنای نوع انتخاب‌شده با برچسب‌های استاتیک دقیق و پارسر هوشمند
-        when (inputMode) {
-            InputMode.PASTE -> {
-                Column {
+                // بخش گرافیکی دعوت به کانال تلگرام حامی برنامه
+                Card(
+                    onClick = {
+                        try {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/vpnclashfa"))
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "خطا در باز کردن تلگرام: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1D9BF0).copy(alpha = 0.15f)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF1D9BF0))
+                ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            .padding(vertical = 8.dp, horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
                     ) {
-                        Button(
-                            onClick = { pasteFromClipboard() },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                        ) {
-                            Text("جایگذاری از کلیپ‌بورد", fontSize = 11.sp)
+                        Text(
+                            text = "📢 عضویت در کانال تلگرام vpnclashfa",
+                            color = Color(0xFF60A5FA),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+
+                // ردیف تنظیمات: همزمانی و تایم اوت
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = concurrencyText,
+                        onValueChange = { if (it.all { char -> char.isDigit() }) concurrencyText = it },
+                        label = { Text(stringResource(id = R.string.placeholder_concurrency)) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = timeoutText,
+                        onValueChange = { if (it.all { char -> char.isDigit() }) timeoutText = it },
+                        label = { Text(stringResource(id = R.string.placeholder_timeout)) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                }
+
+                // نوار انتخاب سه حالته ورودی‌ها با فیلتر چیپ‌ها
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val modes = listOf(
+                        InputMode.PASTE to "کلیپ‌بورد / متن",
+                        InputMode.FILE to "انتخاب فایل",
+                        InputMode.SUBS to "لینک‌های اشتراک"
+                    )
+                    modes.forEach { (mode, label) ->
+                        val isSelected = inputMode == mode
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { inputMode = mode },
+                            label = { Text(label, fontSize = 11.sp, fontWeight = FontWeight.Medium) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                selectedLabelColor = Color.White
+                            ),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                // رندر کردن ویجت ورودی بر مبنای نوع انتخاب‌شده
+                when (inputMode) {
+                    InputMode.PASTE -> {
+                        Column {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = { pasteFromClipboard() },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                                ) {
+                                    Text("جایگذاری از کلیپ‌بورد", fontSize = 11.sp)
+                                }
+                                Button(
+                                    onClick = { inputText = "" },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444))
+                                ) {
+                                    Text("پاک کردن متن", fontSize = 11.sp)
+                                }
+                            }
+                            OutlinedTextField(
+                                value = inputText,
+                                onValueChange = { inputText = it },
+                                label = { Text("متن حاوی پروکسی‌ها (پشتیبانی از فرمت‌های کانال‌ها)") },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(180.dp),
+                                maxLines = 1000
+                            )
                         }
-                        Button(
-                            onClick = { inputText = "" },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444))
-                        ) {
-                            Text("پاک کردن متن", fontSize = 11.sp)
+                    }
+                    InputMode.FILE -> {
+                        Column {
+                            Button(
+                                onClick = { filePickerLauncher.launch("text/*") },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                            ) {
+                                Text("انتخاب فایل متنی (.txt)", fontSize = 13.sp)
+                            }
+                            OutlinedTextField(
+                                value = inputText,
+                                onValueChange = { inputText = it },
+                                label = { Text("متن فایل وارد شده") },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(180.dp),
+                                maxLines = 1000
+                            )
                         }
                     }
-                    OutlinedTextField(
-                        value = inputText,
-                        onValueChange = { inputText = it },
-                        label = { Text("متن حاوی پروکسی‌ها (پشتیبانی از فرمت‌های نامنظم کانال‌ها)") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(130.dp),
-                        maxLines = 1000
-                    )
-                }
-            }
-            InputMode.FILE -> {
-                Column {
-                    Button(
-                        onClick = { filePickerLauncher.launch("text/*") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 8.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                    ) {
-                        Text("انتخاب فایل متنی (.txt)", fontSize = 13.sp)
+                    InputMode.SUBS -> {
+                        Column {
+                            Button(
+                                onClick = { loadSubscriptions() },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                            ) {
+                                Text(stringResource(id = R.string.load_subs_btn), fontSize = 13.sp)
+                            }
+                            OutlinedTextField(
+                                value = subscriptionLinksText,
+                                onValueChange = { subscriptionLinksText = it },
+                                label = { Text("لینک‌های اشتراک پروکسی (خط‌به‌خط)") },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(180.dp),
+                                maxLines = 1000
+                            )
+                        }
                     }
-                    OutlinedTextField(
-                        value = inputText,
-                        onValueChange = { inputText = it },
-                        label = { Text("متن فایل وارد شده (شناسایی هوشمند تمامی پروکسی‌ها)") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(130.dp),
-                        maxLines = 1000
-                    )
                 }
-            }
-            InputMode.SUBS -> {
-                Column {
-                    Button(
-                        onClick = { loadSubscriptions() },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 8.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                    ) {
-                        Text(stringResource(id = R.string.load_subs_btn), fontSize = 13.sp)
-                    }
-                    OutlinedTextField(
-                        value = subscriptionLinksText,
-                        onValueChange = { subscriptionLinksText = it },
-                        label = { Text("لینک‌های اشتراک پروکسی (خط‌به‌خط)") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(130.dp),
-                        maxLines = 1000
-                    )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // دکمه شروع تست عملیاتی
+                Button(
+                    onClick = { startValidation() },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))
+                ) {
+                    Text("شروع تست و انتقال به مانیتور ⚡", fontWeight = FontWeight.Bold)
                 }
+                
+                Spacer(modifier = Modifier.height(24.dp))
             }
         }
 
-        // دکمه کنترل عملیات
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Button(
-                onClick = { if (isChecking) stopValidation() else startValidation() },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isChecking) Color.Red else Color(0xFF10B981)
-                )
-            ) {
-                Text(if (isChecking) stringResource(id = R.string.stop_btn) else stringResource(id = R.string.start_btn))
-            }
-        }
-
-        // نمایش پیشرفت زنده تست
-        if (isChecking && proxyList.isNotEmpty()) {
-            val progress = checkedCount.toFloat() / proxyList.size.toFloat()
-            LinearProgressIndicator(
-                progress = progress,
+        // محتوای تب دوم: لاگ‌ها، مانیتور پیشرفت و کنترل‌ها با فضای عالی
+        if (selectedTab == 1) {
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 8.dp)
-                    .clip(RoundedCornerShape(4.dp)),
-                color = MaterialTheme.colorScheme.primary,
-                trackColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
-            )
-        }
-
-        // بخش نمایش آمار تست‌ها
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 8.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
+                    .weight(1f)
+                    .padding(horizontal = 16.dp)
             ) {
-                Text(
-                    text = stringResource(id = R.string.stats_checked, checkedCount, proxyList.size),
-                    color = Color.White,
-                    fontWeight = FontWeight.Medium
-                )
-                Text(
-                    text = stringResource(id = R.string.stats_working, workingCount),
-                    color = Color(0xFF10B981),
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = stringResource(id = R.string.stats_failed, failedCount),
-                    color = Color(0xFFEF4444),
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        }
+                // دکمه کنترل عملیات جاری (توقف/شروع)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = { if (isChecking) stopValidation() else startValidation() },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isChecking) Color.Red else Color(0xFF10B981)
+                        )
+                    ) {
+                        Text(
+                            text = if (isChecking) stringResource(id = R.string.stop_btn) else stringResource(id = R.string.start_btn),
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
 
-        // بخش کنسول لاگ زنده سیستم
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color.Black)
-                .border(1.dp, Color(0xFF334155), RoundedCornerShape(8.dp))
-                .padding(8.dp)
-        ) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                reverseLayout = true
-            ) {
-                items(logsList.asReversed()) { log ->
+                // نمایش پیشرفت زنده تست
+                if (isChecking && proxyList.isNotEmpty()) {
+                    val progress = checkedCount.toFloat() / proxyList.size.toFloat()
+                    LinearProgressIndicator(
+                        progress = progress,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp)
+                            .clip(RoundedCornerShape(4.dp)),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+                    )
+                }
+
+                // بخش نمایش آمار تست‌ها
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = stringResource(id = R.string.stats_checked, checkedCount, proxyList.size),
+                            color = Color.White,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = stringResource(id = R.string.stats_working, workingCount),
+                            color = Color(0xFF10B981),
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = stringResource(id = R.string.stats_failed, failedCount),
+                            color = Color(0xFFEF4444),
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                // بخش کنسول لاگ زنده سیستم با ابعاد مناسب و اسکرول مجزا
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color.Black)
+                        .border(1.dp, Color(0xFF334155), RoundedCornerShape(8.dp))
+                        .padding(8.dp)
+                ) {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        reverseLayout = true
+                    ) {
+                        items(logsList.asReversed()) { log ->
+                            Text(
+                                text = log,
+                                color = if (log.contains("✔ ACTIVE")) Color(0xFF10B981) else Color(0xFFcbd5e1),
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.padding(bottom = 2.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // ردیف کپی و خروجی‌ها
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = { copyAllToClipboard() },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6))
+                    ) {
+                        Text(stringResource(id = R.string.copy_all), fontSize = 11.sp)
+                    }
+                    Button(
+                        onClick = { exportAsTxt() },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669))
+                    ) {
+                        Text(stringResource(id = R.string.export_file), fontSize = 11.sp)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // دکمه اتصال مستقیم به بهترین پروکسی با تفکیک رنگ
+                Button(
+                    onClick = { connectToBestProxy() },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D9BF0)) // Telegram Blue
+                ) {
                     Text(
-                        text = log,
-                        color = if (log.contains("✔ ACTIVE")) Color(0xFF10B981) else Color(0xFFcbd5e1),
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.padding(bottom = 2.dp)
+                        text = "🚀 اتصال مستقیم به بهترین پروکسی (کمترین پینگ)",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
                     )
                 }
-            }
-        }
 
-        Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-        // ردیف کپی و خروجی‌ها
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Button(
-                onClick = { copyAllToClipboard() },
-                modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6))
-            ) {
-                Text(stringResource(id = R.string.copy_all), fontSize = 11.sp)
-            }
-            Button(
-                onClick = { exportAsTxt() },
-                modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669))
-            ) {
-                Text(stringResource(id = R.string.export_file), fontSize = 11.sp)
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // دکمه جدید: اتصال مستقیم به بهترین پروکسی با تفکیک رنگ و موقعیت مستقل و چشم‌نواز
-        Button(
-            onClick = { connectToBestProxy() },
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D9BF0)) // Telegram Blue
-        ) {
-            Text(
-                text = "🚀 اتصال مستقیم به بهترین پروکسی (کمترین پینگ)",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-            )
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // کپی تعداد مشخص از بهترین‌ها با طراحی کامپکت و عاری از به‌هم‌ریختگی
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutlinedTextField(
-                value = topNText,
-                onValueChange = { if (it.all { char -> char.isDigit() }) topNText = it },
-                label = { Text("تعداد برتر", fontSize = 10.sp) },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.width(90.dp),
-                singleLine = true
-            )
-            Button(
-                onClick = { copyTopNToClipboard() },
-                modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B5CF6)),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-            ) {
-                Text(
-                    text = "کپی $topNText پروکسی برتر",
-                    fontSize = 12.sp,
-                    maxLines = 1
-                )
+                // کپی تعداد مشخص از بهترین‌ها
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = topNText,
+                        onValueChange = { if (it.all { char -> char.isDigit() }) topNText = it },
+                        label = { Text("تعداد برتر", fontSize = 10.sp) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.width(90.dp),
+                        singleLine = true
+                    )
+                    Button(
+                        onClick = { copyTopNToClipboard() },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B5CF6)),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "کپی $topNText پروکسی برتر",
+                            fontSize = 12.sp,
+                            maxLines = 1
+                        )
+                    }
+                }
             }
         }
     }
