@@ -6,16 +6,18 @@ import kotlinx.coroutines.withContext
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.security.MessageDigest
 import java.security.SecureRandom
+import java.security.cert.X509Certificate
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
-import java.security.MessageDigest
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
-import java.security.cert.X509Certificate
 
 enum class ProxyType { MTPROTO, SOCKS5 }
 
@@ -63,8 +65,11 @@ object ProxyChecker {
         val matches = proxyRegex.findAll(text)
         val rawList = matches.mapNotNull { parseProxy(it.value) }.toList()
         
-        // حذف تکراری‌ها بر اساس زوج سرور و پورت جهت بهینه‌سازی سرعت تست فرآیند
-        return rawList.distinctBy { "${it.host}:${it.port}" }
+        // حذف تکراری‌ها بر اساس زوج سرور، پورت و سکرت جهت بهینه‌سازی سرعت تست فرآیند
+        return rawList.distinctBy { 
+            if (it.type == ProxyType.MTPROTO) "${it.host}:${it.port}:${it.secret}"
+            else "${it.host}:${it.port}:${it.user}:${it.pass}"
+        }
     }
 
     /**
@@ -81,8 +86,16 @@ object ProxyChecker {
                 val uri = Uri.parse(corrected)
                 val server = uri.getQueryParameter("server") ?: return null
                 val port = uri.getQueryParameter("port")?.toIntOrNull() ?: return null
-                val secret = uri.getQueryParameter("secret") ?: return null
-                return ProxyItem(ProxyType.MTPROTO, server, port, secret = secret, originalUrl = cleaned)
+                var secret = uri.getQueryParameter("secret") ?: return null
+                
+                // پاک‌سازی پیشرفته سکرت مطابق با منطق کارآمد پروژه Go
+                secret = secret.split("**")[0].split("#")[0]
+                secret = secret.trimEnd(')', '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '`', '~', '[', ']', '{', '}', '|', ';', ':', '\'', ',', '.', '<', '>', '?', '/', ' ', '\t', '\n', '\r')
+                
+                if (secret.isEmpty()) return null
+                
+                val cleanUrl = "tg://proxy?server=$server&port=$port&secret=$secret"
+                return ProxyItem(ProxyType.MTPROTO, server, port, secret = secret, originalUrl = cleanUrl)
             } else if (cleaned.startsWith("tg://socks") || cleaned.contains("t.me/socks")) {
                 val corrected = cleaned.replace("https://t.me/socks", "tg://socks")
                     .replace("http://t.me/socks", "tg://socks")
@@ -112,31 +125,32 @@ object ProxyChecker {
     }
 
     /**
-     * تست بومی کانکشن پروکسی بهینه‌سازی شده با سوکت‌های سطح پایین جاوا
+     * تست بومی کانکشن پروکسی بهینه‌سازی شده با سوکت‌های سطح پایین جاوا و تایید نهایی منطبق با Go
      */
     suspend fun checkSingleProxy(proxy: ProxyItem, timeoutMs: Int): ProxyItem = withContext(Dispatchers.IO) {
         proxy.status = "Checking"
         var socket: Socket? = null
-        var tunneledSocket: Socket? = null
         try {
+            // فاز ۱: تست سریع اتصال TCP با تایم‌اوت ۱۵۰۰ میلی‌ثانیه مطابق منطق بهینه Go
+            socket = Socket()
+            socket.connect(InetSocketAddress(proxy.host, proxy.port), 1500)
+            socket.close()
+            socket = null
+
+            // فاز ۲: بررسی عمیق صحت پروتکل
             if (proxy.type == ProxyType.SOCKS5) {
                 val start = System.currentTimeMillis()
                 
-                // بررسی مستقیم در دسترس بودن پورت پروکسی SOCKS5
-                socket = Socket()
-                socket.soTimeout = timeoutMs
-                socket.connect(InetSocketAddress(proxy.host, proxy.port), timeoutMs)
-                
-                // تونل کردن سوکت به سمت دیتاسنتر آزمایشی واقعی تلگرام
+                // تونل کردن سوکت SOCKS5 به دیتاسنتر واقعی تلگرام
                 val socksProxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress(proxy.host, proxy.port))
-                tunneledSocket = Socket(socksProxy)
-                tunneledSocket.soTimeout = timeoutMs
-                tunneledSocket.connect(InetSocketAddress(TELEGRAM_TEST_IP, TELEGRAM_TEST_PORT), timeoutMs)
+                socket = Socket(socksProxy)
+                socket.soTimeout = timeoutMs
+                socket.connect(InetSocketAddress(TELEGRAM_TEST_IP, TELEGRAM_TEST_PORT), timeoutMs)
                 
                 proxy.ping = System.currentTimeMillis() - start
                 proxy.status = "Working"
             } else {
-                // تست هوشمند انواع پروکسی‌های MTProto (ساده یا Fake TLS)
+                // تست دقیق MTProto با شبیه‌سازی handshake و ارسال پکت req_pq_multi به DC واقعی
                 val resultPing = checkMtProtoProxy(proxy.host, proxy.port, proxy.secret ?: "", timeoutMs)
                 if (resultPing > 0L) {
                     proxy.ping = resultPing
@@ -150,160 +164,219 @@ object ProxyChecker {
             proxy.status = "Failed"
             proxy.ping = -1
         } finally {
-            try { tunneledSocket?.close() } catch (ignored: Exception) {}
             try { socket?.close() } catch (ignored: Exception) {}
         }
         proxy
     }
 
     /**
-     * شبیه‌سازی پروتکل رمزنگاری کانال ارتباطی پروکسی تلگرام
+     * شبیه‌سازی کامل و دقیق رمزنگاری MTProto، ارسال req_pq_multi و دریافت resPQ برای صحت‌سنجی نهایی با سرور تلگرام
      */
     private fun checkMtProtoProxy(host: String, port: Int, secretHex: String, timeoutMs: Int): Long {
         val start = System.currentTimeMillis()
         val cleanSecret = secretHex.trim().lowercase()
 
         val isFakeTls = cleanSecret.startsWith("ee") && cleanSecret.length > 34
+        var rawSocket: Socket? = null
+        var socketToUse: Socket? = null
 
-        if (isFakeTls) {
-            // --- فرآیند اعتبارسنجی پروکسی‌های مدرن Fake TLS ---
-            var rawSocket: Socket? = null
-            var sslSocket: SSLSocket? = null
-            try {
+        try {
+            rawSocket = Socket()
+            rawSocket.soTimeout = timeoutMs
+            rawSocket.connect(InetSocketAddress(host, port), timeoutMs)
+
+            socketToUse = if (isFakeTls) {
                 val domainHex = cleanSecret.substring(34)
                 val domainBytes = hexToBytes(domainHex)
                 if (domainBytes.isEmpty()) return -1L
                 val domain = String(domainBytes, Charsets.UTF_8).trim()
 
-                rawSocket = Socket()
-                rawSocket.connect(InetSocketAddress(host, port), timeoutMs)
-                
-                sslSocket = sslSocketFactory.createSocket(rawSocket, host, port, true) as SSLSocket
+                val sslSocket = sslSocketFactory.createSocket(rawSocket, host, port, true) as SSLSocket
                 sslSocket.soTimeout = timeoutMs
 
-                // تنظیم SNI شبیه‌سازی شده در هدر کلاینت هلو برای عبور از DPI فیلترینگ
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
                     val sslParams = sslSocket.sslParameters
                     sslParams.serverNames = listOf(javax.net.ssl.SNIHostName(domain))
                     sslSocket.sslParameters = sslParams
                 }
 
-                // انجام دست‌تکانی واقعی TLS با سرور پروکسی
                 sslSocket.startHandshake()
-                
+                sslSocket
+            } else {
+                rawSocket
+            }
+
+            // رمزگشایی سکرت
+            val rawSecret = parseSecret(cleanSecret)
+            if (rawSecret.size != 16) return -1L
+
+            // تولید بایت‌های اولیه تصادفی هدر Obfuscated2 (۶۴ بایتی)
+            val random = SecureRandom()
+            val initBuffer = ByteArray(64)
+            while (true) {
+                random.nextBytes(initBuffer)
+                val val0 = initBuffer[0].toInt() and 0xFF
+                val val4 = (initBuffer[4].toInt() and 0xFF) or 
+                           (initBuffer[5].toInt() and 0xFF shl 8) or 
+                           (initBuffer[6].toInt() and 0xFF shl 16) or 
+                           (initBuffer[7].toInt() and 0xFF shl 24)
+                           
+                if (val0 != 0xef && val4 != 0x00000000 && val4 != 0xefefefef.toInt() && val4 != 0x44444444) {
+                    break
+                }
+            }
+
+            // استفاده از پروتکل استاندارد Intermediate (0xeeeeeeee)
+            initBuffer[56] = 0xee.toByte()
+            initBuffer[57] = 0xee.toByte()
+            initBuffer[58] = 0xee.toByte()
+            initBuffer[59] = 0xee.toByte()
+
+            // هدایت به دیتاسنتر ۴ تولیدی تلگرام (DC 4 Production، به صورت little-endian: 0x04 0x00)
+            initBuffer[60] = 0x04.toByte()
+            initBuffer[61] = 0x00.toByte()
+
+            // استخراج کلید و بردار رمزی فرستنده (Encryption)
+            val keyBytes = ByteArray(32)
+            System.arraycopy(initBuffer, 8, keyBytes, 0, 32)
+            
+            val md = MessageDigest.getInstance("SHA-256")
+            md.update(keyBytes)
+            md.update(rawSecret)
+            val encryptKey = md.digest()
+
+            val encryptIv = ByteArray(16)
+            System.arraycopy(initBuffer, 40, encryptIv, 0, 16)
+
+            val encryptCipher = Cipher.getInstance("AES/CTR/NoPadding").apply {
+                init(Cipher.ENCRYPT_MODE, SecretKeySpec(encryptKey, "AES"), IvParameterSpec(encryptIv))
+            }
+
+            // رمزنگاری ۸ بایت پایانی هدر
+            val encrypted8 = encryptCipher.update(initBuffer, 56, 8)
+            System.arraycopy(encrypted8, 0, initBuffer, 56, 8)
+
+            // ارسال هدر هندی‌شیک به سوکت
+            val out = socketToUse.getOutputStream()
+            out.write(initBuffer)
+            out.flush()
+
+            // دریافت هدر هندی‌شیک پاسخ سرور (۶۴ بایت)
+            val input = socketToUse.getInputStream()
+            val responseBuffer = ByteArray(64)
+            var bytesRead = 0
+            while (bytesRead < 64) {
+                val read = input.read(responseBuffer, bytesRead, 64 - bytesRead)
+                if (read == -1) return -1L
+                bytesRead += read
+            }
+
+            // استخراج کلید و بردار رمزی معکوس برای دریافت (Decryption)
+            val decryptKeyBytes = ByteArray(32)
+            for (i in 0..31) {
+                decryptKeyBytes[i] = initBuffer[55 - i]
+            }
+            val mdDec = MessageDigest.getInstance("SHA-256")
+            mdDec.update(decryptKeyBytes)
+            mdDec.update(rawSecret)
+            val decryptKey = mdDec.digest()
+
+            val decryptIv = ByteArray(16)
+            for (i in 0..15) {
+                decryptIv[i] = initBuffer[23 - i]
+            }
+
+            val decryptCipher = Cipher.getInstance("AES/CTR/NoPadding").apply {
+                init(Cipher.DECRYPT_MODE, SecretKeySpec(decryptKey, "AES"), IvParameterSpec(decryptIv))
+            }
+
+            val decryptedResponse = decryptCipher.update(responseBuffer)
+
+            // راستی‌آزمایی پروتکل Intermediate هندی‌شیک پاسخ پروکسی (باید 0xee باشد)
+            val protoByte = decryptedResponse[56]
+            if (protoByte != 0xee.toByte()) {
+                return -1L
+            }
+            if (decryptedResponse[57] != protoByte || decryptedResponse[58] != protoByte || decryptedResponse[59] != protoByte) {
+                return -1L
+            }
+
+            // --- ارسال درخواست req_pq_multi برای راستی‌آزمایی ۱۰۰٪ در سطح هسته تلگرام ---
+            val msgId = ((System.currentTimeMillis() / 1000) shl 32) and -4L
+            val nonce = ByteArray(16).apply { random.nextBytes(this) }
+            
+            val tlBody = ByteBuffer.allocate(20).apply {
+                order(ByteOrder.LITTLE_ENDIAN)
+                putInt(0xbe7e8ef1.toInt()) // constructor_id
+                put(nonce)
+            }.array()
+
+            val unencryptedMsg = ByteBuffer.allocate(20 + tlBody.size).apply {
+                order(ByteOrder.LITTLE_ENDIAN)
+                putLong(0L) // auth_key_id
+                putLong(msgId) // msg_id
+                putInt(tlBody.size) // body size (20)
+                put(tlBody)
+            }.array()
+
+            // بسته‌بندی بر مبنای فریم Intermediate: [اندازه دیتا: ۴ بایت] [دیتا]
+            val frame = ByteBuffer.allocate(4 + unencryptedMsg.size).apply {
+                order(ByteOrder.LITTLE_ENDIAN)
+                putInt(unencryptedMsg.size)
+                put(unencryptedMsg)
+            }.array()
+
+            // رمزنگاری فریم و ارسال به سوکت
+            val encryptedFrame = encryptCipher.update(frame)
+            out.write(encryptedFrame)
+            out.flush()
+
+            // خواندن هدر فریم دریافتی (۴ بایت طول فریم)
+            val lenBuffer = ByteArray(4)
+            var lenBytesRead = 0
+            while (lenBytesRead < 4) {
+                val read = input.read(lenBuffer, lenBytesRead, 4 - lenBytesRead)
+                if (read == -1) return -1L
+                lenBytesRead += read
+            }
+            val decryptedLenBuffer = decryptCipher.update(lenBuffer)
+            val responseLen = ByteBuffer.wrap(decryptedLenBuffer).order(ByteOrder.LITTLE_ENDIAN).int
+
+            if (responseLen <= 0 || responseLen > 65536) {
+                return -1L
+            }
+
+            // خواندن کل بدنه فریم پاسخ
+            val responsePayload = ByteArray(responseLen)
+            var payloadBytesRead = 0
+            while (payloadBytesRead < responseLen) {
+                val read = input.read(responsePayload, payloadBytesRead, responseLen - payloadBytesRead)
+                if (read == -1) return -1L
+                payloadBytesRead += read
+            }
+            val decryptedPayload = decryptCipher.update(responsePayload)
+
+            // بررسی سلامت پاسخ دریافتی در قالب پکت unencrypted تلگرام
+            if (decryptedPayload.size < 24) {
+                return -1L
+            }
+            val wrapBuffer = ByteBuffer.wrap(decryptedPayload).order(ByteOrder.LITTLE_ENDIAN)
+            val responseAuthKeyId = wrapBuffer.getLong(0)
+            if (responseAuthKeyId != 0L) {
+                return -1L
+            }
+            val responseConstructorId = wrapBuffer.getInt(20)
+            
+            if (responseConstructorId == 0x05162463) { // resPQ شناسه سازنده تایید موفق تلگرام
+                // پروکسی کاملا سالم است و دست‌تکانی نهایی با هسته مرکزی تلگرام با موفقیت انجام شد
                 return System.currentTimeMillis() - start
-            } catch (e: Exception) {
-                // شکست ارتباط امن
-            } finally {
-                try { sslSocket?.close() } catch (ignored: Exception) {}
-                try { rawSocket?.close() } catch (ignored: Exception) {}
             }
-        } else {
-            // --- فرآیند اعتبارسنجی پیشرفته پروکسی‌های MTProto ساده (Obfuscated2) ---
-            var socket: Socket? = null
-            try {
-                val rawSecret = parseSecret(cleanSecret)
-                if (rawSecret.size != 16) return -1L
 
-                socket = Socket()
-                socket.connect(InetSocketAddress(host, port), timeoutMs)
-                socket.soTimeout = timeoutMs
-
-                // تولید بایت‌های اولیه تصادفی ۶۴ تایی هدر
-                val random = SecureRandom()
-                val initBuffer = ByteArray(64)
-                
-                while (true) {
-                    random.nextBytes(initBuffer)
-                    val val0 = initBuffer[0].toInt() and 0xFF
-                    val val4 = (initBuffer[4].toInt() and 0xFF) or 
-                               (initBuffer[5].toInt() and 0xFF shl 8) or 
-                               (initBuffer[6].toInt() and 0xFF shl 16) or 
-                               (initBuffer[7].toInt() and 0xFF shl 24)
-                               
-                    if (val0 != 0xef && val4 != 0x00000000 && val4 != 0xefefefef.toInt() && val4 != 0x44444444) {
-                        break
-                    }
-                }
-
-                // ثبت بایت‌های جفت‌سازی پکت‌ها (Padded Intermediate)
-                initBuffer[56] = 0xdd.toByte()
-                initBuffer[57] = 0xdd.toByte()
-                initBuffer[58] = 0xdd.toByte()
-                initBuffer[59] = 0xdd.toByte()
-
-                // اتصال به سرور مرکزی دیتاسنتر آزمایشی تلگرام (DC 2)
-                initBuffer[60] = 0xfe.toByte()
-                initBuffer[61] = 0xff.toByte()
-
-                // استخراج کلید و بردار رمزی فرستنده (Encryption)
-                val keyBytes = ByteArray(32)
-                System.arraycopy(initBuffer, 8, keyBytes, 0, 32)
-                
-                val md = MessageDigest.getInstance("SHA-256")
-                md.update(keyBytes)
-                md.update(rawSecret)
-                val encryptKey = md.digest()
-
-                val encryptIv = ByteArray(16)
-                System.arraycopy(initBuffer, 40, encryptIv, 0, 16)
-
-                // رمزنگاری هدر آغازین با AES-CTR
-                val cipher = Cipher.getInstance("AES/CTR/NoPadding")
-                cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(encryptKey, "AES"), IvParameterSpec(encryptIv))
-                val encryptedInit = cipher.doFinal(initBuffer)
-
-                System.arraycopy(encryptedInit, 56, initBuffer, 56, 8)
-
-                // ارسال هدر رمزنگاری‌شده به سوکت پروکسی
-                val out = socket.getOutputStream()
-                out.write(initBuffer)
-                out.flush()
-
-                // تلاش برای خواندن ۶۴ بایت هدر پاسخ سرور پروکسی تلگرام
-                val input = socket.getInputStream()
-                val responseBuffer = ByteArray(64)
-                var bytesRead = 0
-                while (bytesRead < 64) {
-                    val read = input.read(responseBuffer, bytesRead, 64 - bytesRead)
-                    if (read == -1) break
-                    bytesRead += read
-                }
-
-                if (bytesRead == 64) {
-                    // محاسبه کلید و بردار رمزگشایی متقارن (Decryption) بر اساس معکوس بافر هدر کلاینت
-                    val decryptKeyBytes = ByteArray(32)
-                    for (i in 0..31) {
-                        decryptKeyBytes[i] = initBuffer[55 - i]
-                    }
-                    val mdDec = MessageDigest.getInstance("SHA-256")
-                    mdDec.update(decryptKeyBytes)
-                    mdDec.update(rawSecret)
-                    val decryptKey = mdDec.digest()
-
-                    val decryptIv = ByteArray(16)
-                    for (i in 0..15) {
-                        decryptIv[i] = initBuffer[23 - i]
-                    }
-
-                    // رمزگشایی داده‌های دریافتی برای راستی آزمایی
-                    val decryptCipher = Cipher.getInstance("AES/CTR/NoPadding")
-                    decryptCipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(decryptKey, "AES"), IvParameterSpec(decryptIv))
-                    val decrypted = decryptCipher.doFinal(responseBuffer)
-
-                    // راستی آزمایی بایت همگام‌سازی پروتکل تلگرام (باید dd, ee یا ef باشد)
-                    val protoByte = decrypted[56]
-                    if (protoByte == 0xdd.toByte() || protoByte == 0xee.toByte() || protoByte == 0xef.toByte()) {
-                        if (decrypted[57] == protoByte && decrypted[58] == protoByte && decrypted[59] == protoByte) {
-                            return System.currentTimeMillis() - start
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                // شکست ارتباط
-            } finally {
-                try { socket?.close() } catch (ignored: Exception) {}
-            }
+        } catch (e: Exception) {
+            // هندشیک ناموفق
+        } finally {
+            try { socketToUse?.close() } catch (ignored: Exception) {}
+            try { rawSocket?.close() } catch (ignored: Exception) {}
         }
         return -1L
     }
@@ -319,6 +392,14 @@ object ProxyChecker {
 
     private fun hexToBytes(hex: String): ByteArray {
         val l = hex.length
+        if (l % 2 != 0) {
+            // پشتیبانی از دکودر Base64 در زمان خطا دار بودن فرمت هگز (مطابق منطق Go)
+            return try {
+                android.util.Base64.decode(hex, android.util.Base64.DEFAULT or android.util.Base64.NO_PADDING or android.util.Base64.URL_SAFE)
+            } catch (e: Exception) {
+                ByteArray(0)
+            }
+        }
         val data = ByteArray(l / 2)
         var i = 0
         try {
@@ -326,7 +407,8 @@ object ProxyChecker {
                 val firstDigit = Character.digit(hex[i], 16)
                 val secondDigit = Character.digit(hex[i + 1], 16)
                 if (firstDigit == -1 || secondDigit == -1) {
-                    return ByteArray(0)
+                    // بک‌آپ دکودر Base64
+                    return android.util.Base64.decode(hex, android.util.Base64.DEFAULT or android.util.Base64.NO_PADDING or android.util.Base64.URL_SAFE)
                 }
                 data[i / 2] = ((firstDigit shl 4) + secondDigit).toByte()
                 i += 2
