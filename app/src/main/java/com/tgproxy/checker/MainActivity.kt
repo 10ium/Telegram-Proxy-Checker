@@ -79,6 +79,15 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun CheckerScreen() {
     val context = LocalContext.current
+    val appVersion = remember {
+        try {
+            val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            val name = pInfo.versionName ?: "2.0.4"
+            if (name.startsWith("v", ignoreCase = true)) name else "v$name"
+        } catch (e: Exception) {
+            "v2.0.4"
+        }
+    }
     val coroutineScope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences("tg_proxy_checker_prefs", Context.MODE_PRIVATE) }
 
@@ -469,7 +478,7 @@ fun CheckerScreen() {
                         .background(Color(0xFF2563EB))
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
-                    Text("v1.2.0", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                    Text(appVersion, fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold)
                 }
             }
 

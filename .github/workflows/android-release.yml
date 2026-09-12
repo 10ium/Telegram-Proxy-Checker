@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'شماره نسخه انتشار (مثال: 1.2.0 یا v1.2.0)'
+        description: 'شماره نسخه انتشار (مثال: 2.0.4 یا v2.0.4)'
         required: false
-        default: '1.2.0'
+        default: '2.0.4'
   push:
     branches:
       - main
@@ -23,6 +23,9 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Determine Version
         id: get_version
@@ -35,15 +38,18 @@ jobs:
             CLEAN_VER="${GITHUB_REF#refs/tags/v}"
             TAG_VER="${GITHUB_REF#refs/tags/}"
           else
-            CLEAN_VER="1.2.0"
-            TAG_VER="v1.2.0"
+            CLEAN_VER="2.0.4"
+            TAG_VER="v2.0.4"
           fi
           
           RUN_NUM="${{ github.run_number }}"
+          # تضمین بالاتر بودن همیشگی versionCode نسبت به نسخه‌های قبلی جهت آپدیت بدون خطا
+          CALC_CODE=$(( 20000 + RUN_NUM ))
+          
           echo "VERSION_NAME=${CLEAN_VER}" >> $GITHUB_ENV
           echo "TAG_NAME=${TAG_VER}" >> $GITHUB_ENV
-          echo "VERSION_CODE=${RUN_NUM}" >> $GITHUB_ENV
-          echo "Target Version: ${CLEAN_VER} (Tag: ${TAG_VER}, Code: ${RUN_NUM})"
+          echo "VERSION_CODE=${CALC_CODE}" >> $GITHUB_ENV
+          echo "Target Version: ${CLEAN_VER} (Tag: ${TAG_VER}, Code: ${CALC_CODE})"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -60,14 +66,14 @@ jobs:
 
       - name: Update Versioning in Build Gradle
         run: |
-          sed -i "s/versionCode = 1/versionCode = $VERSION_CODE/g" app/build.gradle.kts
-          sed -i "s/versionName = \"1.0.0\"/versionName = \"$VERSION_NAME\"/g" app/build.gradle.kts
+          sed -i -E "s/versionCode = [0-9]+/versionCode = $VERSION_CODE/g" app/build.gradle.kts
+          sed -i -E "s/versionName = \".*\"/versionName = \"$VERSION_NAME\"/g" app/build.gradle.kts
           echo "Updated app/build.gradle.kts with Version: $VERSION_NAME ($VERSION_CODE)"
 
       - name: Build Release APK
         run: ./gradlew assembleRelease --no-daemon
 
-      - name: Prepare Keystore File
+      - name: Prepare Persistent Keystore File
         shell: python
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -83,26 +89,44 @@ jobs:
           keystore_pass = os.environ.get("KEYSTORE_PASSWORD", "telegramchecker").strip()
           key_pass = os.environ.get("KEY_PASSWORD", "telegramchecker").strip()
           key_alias = os.environ.get("KEY_ALIAS", "release").strip()
+          repo_keystore = "keystore/release.keystore"
 
           if keystore_b64:
               print("KEYSTORE_BASE64 secret found! Decoding your persistent signing key...")
               clean_b64 = "".join(keystore_b64.split())
               with open("release.keystore", "wb") as f:
                   f.write(base64.b64decode(clean_b64))
+          elif os.path.exists(repo_keystore):
+              print(f"Found persistent keystore at {repo_keystore}! Using it so updates match signatures perfectly...")
+              with open(repo_keystore, "rb") as src, open("release.keystore", "wb") as dst:
+                  dst.write(src.read())
           else:
-              print("KEYSTORE_BASE64 secret not found! Generating a temporary keystore on-the-fly...")
+              print("No existing keystore found. Generating a permanent keystore for all future releases...")
+              os.makedirs("keystore", exist_ok=True)
               cmd = [
                   "keytool", "-genkey", "-v",
-                  "-keystore", "release.keystore",
+                  "-keystore", repo_keystore,
                   "-alias", key_alias,
                   "-keyalg", "RSA",
                   "-keysize", "2048",
                   "-validity", "10000",
                   "-storepass", keystore_pass,
                   "-keypass", key_pass,
-                  "-dname", "CN=tgproxy, O=tgproxy, C=US"
+                  "-dname", "CN=TelegramProxyChecker, O=10ium, C=US"
               ]
               subprocess.run(cmd, check=True)
+              with open(repo_keystore, "rb") as src, open("release.keystore", "wb") as dst:
+                  dst.write(src.read())
+              
+              try:
+                  subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
+                  subprocess.run(["git", "config", "user.email", "github-actions[bot]@users.noreply.github.com"], check=True)
+                  subprocess.run(["git", "add", repo_keystore], check=True)
+                  subprocess.run(["git", "commit", "-m", "ci: store permanent release keystore for seamless app updates [skip ci]"], check=True)
+                  subprocess.run(["git", "push", "origin", "main"], check=True)
+                  print("Permanent keystore committed to repo successfully!")
+              except Exception as err:
+                  print(f"Git commit note: {err}")
 
       - name: Sign APK with apksigner
         env:
@@ -134,17 +158,18 @@ jobs:
           name: "Telegram Proxy Checker ${{ env.TAG_NAME }}"
           draft: false
           prerelease: false
+          make_latest: true
           body: |
-            ## 🛡️ Telegram Proxy Checker ${{ env.TAG_NAME }} (Crash Fixed)
+            ## 🛡️ Telegram Proxy Checker ${{ env.TAG_NAME }}
             
             ### 🌟 قابلیت‌های جدید و بهینه‌سازی‌ها:
             - **پشتیبانی کامل از هر ۴ پروتکل تلگرام:** تست عمیق و واقعی MTProto (ساده، dd، Fake-TLS)، SOCKS5، HTTP CONNECT و WebProxy.
+            - **امضای دائمی و سازگار (Seamless In-Place Updates):** کلید امضای اختصاصی و دائمی برای نصب و آپدیت مستقیم روی نسخه‌های قبلی بدون نیاز به حذف برنامه.
+            - **نمایش خودکار نسخه انتخابی در هدر برنامه:** نسخه مشخص‌شده در اکشن گیت‌هاب به صورت خودکار در بالای برنامه نشان داده می‌شود.
+            - **رفع قطعی باگ کرش:** حذف کامل تداخل داده‌ها و استفاده از استخر پردازشی (Worker Pool) و شناسه‌های منحصر‌به‌فرد.
             - **پروفایل‌های هوشمند شبکه:** سریع (۳ ثانیه / ۵۰ همزمان)، متعادل (۵ ثانیه / ۲۵ همزمان)، و اختلال شدید / اینترانت (۶۰ ثانیه / ۱۰ همزمان).
-            - **کلید پیش‌چک TCP:** امکان غیرفعال‌سازی پیش‌چک در زمان اینترانت جهت جلوگیری از حذف اشتباه پروکسی‌های کند.
             - **داشبورد آمار زنده تفکیکی:** نمایش تعداد پروکسی‌های سالم به تفکیک هر ۴ پروتکل به همراه کمترین و میانگین پینگ.
-            - **لیست تعاملی پروکسی‌های سالم:** کارت‌های تفکیک‌شده با برچسب پروتکل، پینگ رنگی، دکمه کپی و اتصال مستقیم به تلگرام.
-            - **سیستم سابسکریپشن مقاوم:** افزایش تایم‌اوت به ۲۵ و ۴۵ ثانیه و دیکود خودکار Base64 برای جلوگیری از لغو زودهنگام در لیست‌های حجیم.
-            - **خروجی متنوع:** پشتیبانی کامل از دریافت TXT و JSON، کپی N تای برتر و اتصال مستقیم سریع‌ترین پروکسی.
+            - **سیستم سابسکریپشن مقاوم:** تایم‌اوت بهینه و کنترل لغو/توقف در تمامی تب‌ها.
             
             📢 **کانال رسمی تلگرام:** [@vpnclashfa](https://t.me/vpnclashfa)
           files: |

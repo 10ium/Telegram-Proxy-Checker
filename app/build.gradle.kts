@@ -12,8 +12,8 @@ android {
         minSdk = 24
         targetSdk = 34
         // نسخه پایه برنامه - مقدار اصلی در زمان بیلد در اکشن به صورت پویا جایگزین می‌شود
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 204
+        versionName = "2.0.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -40,6 +40,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.8"
