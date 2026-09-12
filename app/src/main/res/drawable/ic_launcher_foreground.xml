@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- طراحی آیکون اختصاصی: نشان تلگرام به همراه نماد تایید و بررسی (Shield & Check) با کد بومی -->
+    <path
+        android:fillColor="#1D9BF0"
+        android:pathData="M24,54 L84,24 L76,84 L48,64 L34,78 L38,58 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M48,64 L76,34 L40,54 Z" />
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M78,68 A12,12 0 1,1 54,68 A12,12 0 1,1 78,68" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M60,68 L64,72 L72,64" />
+</vector>

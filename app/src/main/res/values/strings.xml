@@ -1,0 +1,31 @@
+<resources>
+    <string name="app_name">TG Proxy Checker</string>
+    <string name="title">Telegram Proxy Checker</string>
+    <string name="input_label">Proxy Source Links or Raw Proxies (one per line)</string>
+    <string name="start_btn">Start Deep Check</string>
+    <string name="stop_btn">Stop Check</string>
+    <string name="load_subs_btn">Load From Subscriptions</string>
+    <string name="copy_all">Copy All Working</string>
+    <string name="export_file">Export TXT</string>
+    <string name="export_json">Export JSON</string>
+    <string name="copy_top_n">Copy Top</string>
+    <string name="stats_checked">Checked: %1$d / %2$d</string>
+    <string name="stats_working">Working: %d</string>
+    <string name="stats_failed">Failed: %d</string>
+    <string name="placeholder_concurrency">Concurrency</string>
+    <string name="placeholder_timeout">Timeout (s)</string>
+    <string name="preset_label">Network &amp; Speed Preset</string>
+    <string name="preset_turbo">🚀 Fast (3s | 50 conc)</string>
+    <string name="preset_balanced">⚖️ Balanced (5s | 25 conc)</string>
+    <string name="preset_national">🐢 Heavy Censorship (60s | 10 conc)</string>
+    <string name="preset_custom">🛠️ Custom</string>
+    <string name="tcp_precheck_label">⚡ Fast TCP Pre-check</string>
+    <string name="tab_input">Input &amp; Setup</string>
+    <string name="tab_working">Working Proxies (%d)</string>
+    <string name="tab_logs">Logs &amp; Monitor</string>
+    <string name="btn_connect_telegram">Connect</string>
+    <string name="btn_copy">Copy</string>
+    <string name="toast_copied">Copied to clipboard!</string>
+    <string name="toast_file_saved">File shared successfully!</string>
+    <string name="toast_empty">No working proxies to copy or export!</string>
+</resources>
