@@ -55,6 +55,30 @@ enum class PresetMode { FAST, BALANCED, NATIONAL, CUSTOM }
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // هندلر سراسری جهت رهگیری هرگونه خطای برنامه‌نویسی یا سیستم‌عامل و امکان کپی آنی توسط کاربر
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                val sw = java.io.StringWriter()
+                throwable.printStackTrace(java.io.PrintWriter(sw))
+                val stackTrace = sw.toString()
+
+                val prefs = getSharedPreferences("tg_proxy_checker_prefs", Context.MODE_PRIVATE)
+                prefs.edit().putString("last_crash_log", stackTrace).commit()
+
+                val intent = Intent(this, CrashActivity::class.java).apply {
+                    putExtra("CRASH_LOG", stackTrace)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                }
+                startActivity(intent)
+                android.os.Process.killProcess(android.os.Process.myPid())
+                System.exit(1)
+            } catch (e: Throwable) {
+                defaultHandler?.uncaughtException(thread, throwable)
+            }
+        }
+
         setContent {
             MaterialTheme(
                 colorScheme = darkColorScheme(
@@ -334,24 +358,33 @@ fun CheckerScreen() {
         }
         isFetchingSubs = true
         fetchSubsJob = coroutineScope.launch {
-            appendLog("Fetching subscription links with extended timeout...")
-            val fetchedProxies = mutableListOf<String>()
-            for (subUrl in links) {
-                if (!isFetchingSubs) break
-                val list = SubscriptionFetcher.fetchSubscription(subUrl) { msg ->
-                    appendLog(msg)
+            try {
+                appendLog("Fetching subscription links with extended timeout...")
+                val fetchedProxies = withContext(Dispatchers.IO) {
+                    val list = mutableListOf<String>()
+                    for (subUrl in links) {
+                        if (!isFetchingSubs) break
+                        val result = SubscriptionFetcher.fetchSubscription(subUrl) { msg ->
+                            coroutineScope.launch(Dispatchers.Main) { appendLog(msg) }
+                        }
+                        result.forEach { list.add(it.originalUrl) }
+                    }
+                    list
                 }
-                list.forEach { fetchedProxies.add(it.originalUrl) }
-            }
-            isFetchingSubs = false
-            if (fetchedProxies.isNotEmpty()) {
-                inputText = fetchedProxies.distinct().joinToString("\n")
-                appendLog("Loaded ${fetchedProxies.size} proxies from subscriptions.")
-                inputMode = InputMode.PASTE
-                Toast.makeText(context, "تعداد ${fetchedProxies.size} پروکسی استخراج شد!", Toast.LENGTH_SHORT).show()
-            } else {
-                appendLog("No proxies could be extracted from subscription links.")
-                Toast.makeText(context, "هیچ پروکسی دریافت نشد.", Toast.LENGTH_SHORT).show()
+                if (fetchedProxies.isNotEmpty()) {
+                    inputText = fetchedProxies.distinct().joinToString("\n")
+                    appendLog("Loaded ${fetchedProxies.size} proxies from subscriptions.")
+                    inputMode = InputMode.PASTE
+                    Toast.makeText(context, "تعداد ${fetchedProxies.size} پروکسی استخراج شد!", Toast.LENGTH_SHORT).show()
+                } else {
+                    appendLog("No proxies could be extracted from subscription links.")
+                    Toast.makeText(context, "هیچ پروکسی دریافت نشد.", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Throwable) {
+                appendLog("Error in subscription fetch: ${e.localizedMessage ?: "Unknown Error"}")
+                Toast.makeText(context, "خطا در دریافت سابسکریپشن: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            } finally {
+                isFetchingSubs = false
             }
         }
     }
@@ -778,15 +811,7 @@ fun CheckerScreen() {
                                 )
                             ) {
                                 if (isFetchingSubs) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(16.dp), 
-                                            color = Color.White, 
-                                            strokeWidth = 2.dp
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text("⏹️ لغو دریافت سابسکریپشن‌ها", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                    }
+                                    Text("⏹️ در حال دریافت... (کلیک برای لغو)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 } else {
                                     Text(stringResource(id = R.string.load_subs_btn), fontSize = 12.sp)
                                 }
@@ -1120,12 +1145,58 @@ fun CheckerScreen() {
 
         // --- محتوای تب سوم: مانیتور و لاگ‌های سیستمی ---
         if (selectedTab == 2) {
+            val lastCrashLog = remember { mutableStateOf(prefs.getString("last_crash_log", null)) }
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
                     .padding(horizontal = 16.dp)
             ) {
+                // کارت دسترسی سریع به کپی آخرین خطای رخ‌داده
+                if (!lastCrashLog.value.isNullOrEmpty()) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFEF4444).copy(alpha = 0.15f)),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEF4444))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("⚠️ گزارش خطای سیستمی ثبت شده", color = Color(0xFFFCA5A5), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Button(
+                                    onClick = {
+                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                        clipboard.setPrimaryClip(ClipData.newPlainText("Crash_Log", lastCrashLog.value))
+                                        Toast.makeText(context, "گزارش خطا کپی شد!", Toast.LENGTH_SHORT).show()
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    modifier = Modifier.height(28.dp)
+                                ) {
+                                    Text("📋 کپی خطا", fontSize = 10.sp, color = Color.White)
+                                }
+                                Button(
+                                    onClick = {
+                                        prefs.edit().remove("last_crash_log").apply()
+                                        lastCrashLog.value = null
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF475569)),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    modifier = Modifier.height(28.dp)
+                                ) {
+                                    Text("✕", fontSize = 10.sp, color = Color.White)
+                                }
+                            }
+                        }
+                    }
+                }
                 // دکمه کنترل توقف/شروع
                 Button(
                     onClick = { if (isChecking) stopValidation() else startValidation() },

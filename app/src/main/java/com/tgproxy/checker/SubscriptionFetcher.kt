@@ -50,14 +50,14 @@ object SubscriptionFetcher {
                     val cleanBase64 = rawData.replace("\r", "").replace("\n", "").trim()
                     val decodedBytes = try {
                         Base64.decode(cleanBase64, Base64.DEFAULT or Base64.NO_PADDING or Base64.URL_SAFE)
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                         Base64.decode(cleanBase64, Base64.DEFAULT)
                     }
                     val decodedText = String(decodedBytes, Charsets.UTF_8)
                     if (decodedText.contains("tg://") || decodedText.contains("socks") || decodedText.contains("http")) {
                         rawData = decodedText
                     }
-                } catch (ignored: Exception) {
+                } catch (ignored: Throwable) {
                     // متن دیکود نشد یا بیس۶۴ نبود
                 }
             }
@@ -68,10 +68,10 @@ object SubscriptionFetcher {
 
             logger("Loaded ${proxies.size} proxies: $urlStr")
 
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             logger("Failed to load sub: $urlStr - ${e.localizedMessage ?: "Timeout/Network Error"}")
         } finally {
-            try { connection?.disconnect() } catch (ignored: Exception) {}
+            try { connection?.disconnect() } catch (ignored: Throwable) {}
         }
         proxies
     }
