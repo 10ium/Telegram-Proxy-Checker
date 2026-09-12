@@ -14,6 +14,7 @@ import java.nio.ByteOrder
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
+import java.util.UUID
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -24,7 +25,9 @@ import javax.net.ssl.X509TrustManager
 
 enum class ProxyType { MTPROTO, SOCKS5, HTTP, WEBPROXY }
 
+// کلاس داده کاملاً غیرقابل تغییر (Immutable) با شناسه یکتا جهت پیشگیری قطعی از کرش در Jetpack Compose
 data class ProxyItem(
+    val id: String = UUID.randomUUID().toString(),
     val type: ProxyType,
     val host: String,
     val port: Int,
@@ -32,17 +35,15 @@ data class ProxyItem(
     val user: String? = null,
     val pass: String? = null,
     val originalUrl: String,
-    var ping: Long = -1,
-    var status: String = "Waiting" // "Waiting", "Checking", "Working", "Failed"
+    val ping: Long = -1,
+    val status: String = "Waiting" // "Waiting", "Checking", "Working", "Failed"
 )
 
 object ProxyChecker {
 
-    // آی‌پی یکی از سرورهای هسته مرکزی تلگرام برای ارزیابی صحت مسیردهی پروکسی‌ها
     private const val TELEGRAM_TEST_IP = "91.108.56.111"
     private const val TELEGRAM_TEST_PORT = 443
 
-    // پیکربندی TrustManager بدون بررسی سخت‌گیرانه برای پذیرش گواهینامه‌های خودامضا در Fake TLS
     private val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
         override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
         override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
@@ -61,21 +62,20 @@ object ProxyChecker {
     fun extractProxiesFromText(text: String): List<ProxyItem> {
         if (text.trim().isEmpty()) return emptyList()
         
-        // الگوی هوشمند شناسایی ۴ پروتکل تلگرام (MTProto, SOCKS5, HTTP, WebProxy)
         val proxyRegex = Regex(
             """(?i)(tg://(?:proxy|socks|http|webproxy)\?[^\s"'\n\r<>]+|https?://(?:t\.me|telegram\.me)/(?:proxy|socks|http|webproxy)\?[^\s"'\n\r<>]+|socks5?://[^\s"'\n\r<>]+)"""
         )
         val matches = proxyRegex.findAll(text)
         val rawList = matches.mapNotNull { parseProxy(it.value) }.toList()
         
-        // حذف تکراری‌ها بر اساس نوع، سرور، پورت، سکرت و مشخصات احراز هویت
+        // یکتاسازی بر اساس نوع، سرور، پورت، سکرت و احراز هویت
         return rawList.distinctBy { 
             "${it.type}:${it.host.lowercase()}:${it.port}:${it.secret ?: ""}:${it.user ?: ""}:${it.pass ?: ""}"
         }
     }
 
     /**
-     * تحلیل و پارس انواع مختلف لینک‌های پروکسی تلگرام
+     * تحلیل و پارس ایمن انواع لینک‌های پروکسی تلگرام با اعتبارسنجی محدوده پورت
      */
     fun parseProxy(url: String): ProxyItem? {
         try {
@@ -87,17 +87,17 @@ object ProxyChecker {
                 val corrected = cleaned.replace("https://t.me/proxy", "tg://proxy", ignoreCase = true)
                     .replace("http://t.me/proxy", "tg://proxy", ignoreCase = true)
                 val uri = Uri.parse(corrected)
-                val server = uri.getQueryParameter("server") ?: return null
+                val server = uri.getQueryParameter("server")?.trim() ?: return null
                 val port = uri.getQueryParameter("port")?.toIntOrNull() ?: return null
-                var secret = uri.getQueryParameter("secret") ?: return null
-                
-                // پاک‌سازی سکرت
+                if (server.isEmpty() || port !in 1..65535) return null
+
+                var secret = uri.getQueryParameter("secret")?.trim() ?: return null
                 secret = secret.split("**")[0].split("#")[0]
                 secret = secret.trimEnd(')', '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '`', '~', '[', ']', '{', '}', '|', ';', ':', '\'', ',', '.', '<', '>', '?', '/', ' ', '\t', '\n', '\r')
                 if (secret.isEmpty()) return null
                 
                 val cleanUrl = "tg://proxy?server=$server&port=$port&secret=$secret"
-                return ProxyItem(ProxyType.MTPROTO, server, port, secret = secret, originalUrl = cleanUrl)
+                return ProxyItem(type = ProxyType.MTPROTO, host = server, port = port, secret = secret, originalUrl = cleanUrl)
             }
             
             // ۲. پروتکل SOCKS5
@@ -105,26 +105,30 @@ object ProxyChecker {
                 val corrected = cleaned.replace("https://t.me/socks", "tg://socks", ignoreCase = true)
                     .replace("http://t.me/socks", "tg://socks", ignoreCase = true)
                 val uri = Uri.parse(corrected)
-                val server = uri.getQueryParameter("server") ?: return null
+                val server = uri.getQueryParameter("server")?.trim() ?: return null
                 val port = uri.getQueryParameter("port")?.toIntOrNull() ?: return null
-                val user = uri.getQueryParameter("user")
-                val pass = uri.getQueryParameter("pass")
+                if (server.isEmpty() || port !in 1..65535) return null
+
+                val user = uri.getQueryParameter("user")?.trim()
+                val pass = uri.getQueryParameter("pass")?.trim()
                 val tgFormat = "tg://socks?server=$server&port=$port" +
                         (if (!user.isNullOrEmpty()) "&user=$user" else "") +
                         (if (!pass.isNullOrEmpty()) "&pass=$pass" else "")
-                return ProxyItem(ProxyType.SOCKS5, server, port, user = user, pass = pass, originalUrl = tgFormat)
+                return ProxyItem(type = ProxyType.SOCKS5, host = server, port = port, user = user, pass = pass, originalUrl = tgFormat)
             }
             if (cleaned.startsWith("socks5://", ignoreCase = true) || cleaned.startsWith("socks://", ignoreCase = true)) {
                 val uri = Uri.parse(cleaned)
-                val server = uri.host ?: return null
+                val server = uri.host?.trim() ?: return null
                 val port = if (uri.port != -1) uri.port else 1080
+                if (server.isEmpty() || port !in 1..65535) return null
+
                 val userInfo = uri.userInfo?.split(":")
                 val user = userInfo?.getOrNull(0)
                 val pass = userInfo?.getOrNull(1)
                 val tgFormat = "tg://socks?server=$server&port=$port" +
                         (if (!user.isNullOrEmpty()) "&user=$user" else "") +
                         (if (!pass.isNullOrEmpty()) "&pass=$pass" else "")
-                return ProxyItem(ProxyType.SOCKS5, server, port, user = user, pass = pass, originalUrl = tgFormat)
+                return ProxyItem(type = ProxyType.SOCKS5, host = server, port = port, user = user, pass = pass, originalUrl = tgFormat)
             }
 
             // ۳. پروتکل HTTP Proxy
@@ -132,14 +136,16 @@ object ProxyChecker {
                 val corrected = cleaned.replace("https://t.me/http", "tg://http", ignoreCase = true)
                     .replace("http://t.me/http", "tg://http", ignoreCase = true)
                 val uri = Uri.parse(corrected)
-                val server = uri.getQueryParameter("server") ?: return null
+                val server = uri.getQueryParameter("server")?.trim() ?: return null
                 val port = uri.getQueryParameter("port")?.toIntOrNull() ?: 8080
-                val user = uri.getQueryParameter("user")
-                val pass = uri.getQueryParameter("pass")
+                if (server.isEmpty() || port !in 1..65535) return null
+
+                val user = uri.getQueryParameter("user")?.trim()
+                val pass = uri.getQueryParameter("pass")?.trim()
                 val tgFormat = "tg://http?server=$server&port=$port" +
                         (if (!user.isNullOrEmpty()) "&user=$user" else "") +
                         (if (!pass.isNullOrEmpty()) "&pass=$pass" else "")
-                return ProxyItem(ProxyType.HTTP, server, port, user = user, pass = pass, originalUrl = tgFormat)
+                return ProxyItem(type = ProxyType.HTTP, host = server, port = port, user = user, pass = pass, originalUrl = tgFormat)
             }
 
             // ۴. پروتکل WebProxy تلگرام
@@ -147,33 +153,30 @@ object ProxyChecker {
                 val corrected = cleaned.replace("https://t.me/webproxy", "tg://webproxy", ignoreCase = true)
                     .replace("http://t.me/webproxy", "tg://webproxy", ignoreCase = true)
                 val uri = Uri.parse(corrected)
-                val server = uri.getQueryParameter("server") ?: return null
+                val server = uri.getQueryParameter("server")?.trim() ?: return null
                 val port = uri.getQueryParameter("port")?.toIntOrNull() ?: 443
-                val secret = uri.getQueryParameter("secret")
+                if (server.isEmpty() || port !in 1..65535) return null
+
+                val secret = uri.getQueryParameter("secret")?.trim()
                 val cleanUrl = "tg://webproxy?server=$server&port=$port" +
                         (if (!secret.isNullOrEmpty()) "&secret=$secret" else "")
-                return ProxyItem(ProxyType.WEBPROXY, server, port, secret = secret, originalUrl = cleanUrl)
+                return ProxyItem(type = ProxyType.WEBPROXY, host = server, port = port, secret = secret, originalUrl = cleanUrl)
             }
-        } catch (e: Exception) {
-            // خطا در پارس لینک
+        } catch (e: Throwable) {
+            // هندلینگ ایمن هرگونه خطای پارس
         }
         return null
     }
 
     /**
-     * تست بومی کانکشن پروکسی بهینه‌سازی شده با سوکت‌های سطح پایین جاوا
-     * همراه با پشتیبانی از کلید پیش‌چک TCP برای جلوگیری از رد شدن اشتباه پروکسی‌ها در اینترانت
+     * تست بومی کانکشن پروکسی با تضمین کامل عدم پرتاب استثنا به لایه UI
      */
     suspend fun checkSingleProxy(proxy: ProxyItem, timeoutMs: Int, enableTcpPrecheck: Boolean = true): ProxyItem = withContext(Dispatchers.IO) {
-        proxy.status = "Checking"
-        
-        // فاز اول: پیش‌ارزیابی سریع اتصال TCP (تنها در صورت فعال بودن پیش‌چک)
+        // فاز اول: پیش‌ارزیابی سریع اتصال TCP
         if (enableTcpPrecheck) {
             val tcpTimeout = minOf(timeoutMs, 1500)
             if (!isTcpReachable(proxy.host, proxy.port, tcpTimeout)) {
-                proxy.status = "Failed"
-                proxy.ping = -1
-                return@withContext proxy
+                return@withContext proxy.copy(status = "Failed", ping = -1)
             }
         }
 
@@ -187,39 +190,31 @@ object ProxyChecker {
             }
 
             if (resultPing > 0L) {
-                proxy.ping = resultPing
-                proxy.status = "Working"
+                proxy.copy(status = "Working", ping = resultPing)
             } else {
-                proxy.status = "Failed"
-                proxy.ping = -1
+                proxy.copy(status = "Failed", ping = -1)
             }
-        } catch (e: Exception) {
-            proxy.status = "Failed"
-            proxy.ping = -1
+        } catch (e: Throwable) {
+            proxy.copy(status = "Failed", ping = -1)
         }
-        proxy
     }
 
-    /**
-     * ارزیابی دسترسی اولیه پورت TCP
-     */
     private fun isTcpReachable(host: String, port: Int, timeoutMs: Int): Boolean {
+        if (port !in 1..65535 || host.isBlank()) return false
         var socket: Socket? = null
         return try {
             socket = Socket()
             socket.connect(InetSocketAddress(host, port), timeoutMs)
             true
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             false
         } finally {
-            try { socket?.close() } catch (ignored: Exception) {}
+            try { socket?.close() } catch (ignored: Throwable) {}
         }
     }
 
-    /**
-     * شبیه‌سازی تونل HTTP CONNECT به سمت دیتاسنترهای تلگرام
-     */
     private fun checkHttpProxy(proxy: ProxyItem, timeoutMs: Int): Long {
+        if (proxy.port !in 1..65535 || proxy.host.isBlank()) return -1L
         val start = System.currentTimeMillis()
         var socket: Socket? = null
         try {
@@ -250,18 +245,16 @@ object ProxyChecker {
             if (statusLine.startsWith("HTTP/") && statusLine.contains("200")) {
                 return System.currentTimeMillis() - start
             }
-        } catch (e: Exception) {
-            // خطا در اتصال تونل HTTP
+        } catch (e: Throwable) {
+            // خطای اتصال
         } finally {
-            try { socket?.close() } catch (ignored: Exception) {}
+            try { socket?.close() } catch (ignored: Throwable) {}
         }
         return -1L
     }
 
-    /**
-     * شبیه‌سازی پروتکل WebProxy تلگرام بر بستر TLS و پورت ۴۴۳
-     */
     private fun checkWebProxy(proxy: ProxyItem, timeoutMs: Int): Long {
+        if (proxy.port !in 1..65535 || proxy.host.isBlank()) return -1L
         val start = System.currentTimeMillis()
         var rawSocket: Socket? = null
         var sslSocket: SSLSocket? = null
@@ -274,9 +267,11 @@ object ProxyChecker {
             sslSocket.soTimeout = timeoutMs
 
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-                val sslParams = sslSocket.sslParameters
-                sslParams.serverNames = listOf(javax.net.ssl.SNIHostName(proxy.host))
-                sslSocket.sslParameters = sslParams
+                try {
+                    val sslParams = sslSocket.sslParameters
+                    sslParams.serverNames = listOf(javax.net.ssl.SNIHostName(proxy.host))
+                    sslSocket.sslParameters = sslParams
+                } catch (ignored: Throwable) {}
             }
 
             sslSocket.startHandshake()
@@ -292,19 +287,17 @@ object ProxyChecker {
             if (read > 0) {
                 return System.currentTimeMillis() - start
             }
-        } catch (e: Exception) {
-            // خطا در هندشیک WebProxy
+        } catch (e: Throwable) {
+            // خطا در هندشیک
         } finally {
-            try { sslSocket?.close() } catch (ignored: Exception) {}
-            try { rawSocket?.close() } catch (ignored: Exception) {}
+            try { sslSocket?.close() } catch (ignored: Throwable) {}
+            try { rawSocket?.close() } catch (ignored: Throwable) {}
         }
         return -1L
     }
 
-    /**
-     * شبیه‌سازی کامل و نخ‌امن (Thread-Safe) ارتباط SOCKS5 بدون دستکاری تنظیمات گلوبال JVM
-     */
     private fun checkSocks5Proxy(proxy: ProxyItem, timeoutMs: Int): Long {
+        if (proxy.port !in 1..65535 || proxy.host.isBlank()) return -1L
         val start = System.currentTimeMillis()
         var socket: Socket? = null
         try {
@@ -315,16 +308,14 @@ object ProxyChecker {
             val out = socket.getOutputStream()
             val input = socket.getInputStream()
 
-            // ۱. ارسال سیگنال اولیه SOCKS5
             val hasAuth = !proxy.user.isNullOrEmpty()
             if (hasAuth) {
-                out.write(byteArrayOf(0x05, 0x02, 0x00, 0x02)) // پشتیبانی از No-Auth و User/Pass
+                out.write(byteArrayOf(0x05, 0x02, 0x00, 0x02))
             } else {
-                out.write(byteArrayOf(0x05, 0x01, 0x00)) // پشتیبانی فقط از No-Auth
+                out.write(byteArrayOf(0x05, 0x01, 0x00))
             }
             out.flush()
 
-            // ۲. دریافت پاسخ احراز هویت سرور
             val greetingRes = ByteArray(2)
             if (readFully(input, greetingRes) != 2 || greetingRes[0] != 0x05.toByte()) {
                 return -1L
@@ -332,12 +323,11 @@ object ProxyChecker {
 
             val selectedMethod = greetingRes[1].toInt() and 0xFF
             if (selectedMethod == 0x02) {
-                // ارسال اطلاعات احراز هویت به سرور
                 val userBytes = proxy.user!!.toByteArray(Charsets.UTF_8)
                 val passBytes = (proxy.pass ?: "").toByteArray(Charsets.UTF_8)
 
                 val authPayload = ByteArray(3 + userBytes.size + passBytes.size)
-                authPayload[0] = 0x01 // نسخه پروتکل احراز هویت
+                authPayload[0] = 0x01
                 authPayload[1] = userBytes.size.toByte()
                 System.arraycopy(userBytes, 0, authPayload, 2, userBytes.size)
                 authPayload[2 + userBytes.size] = passBytes.size.toByte()
@@ -348,21 +338,20 @@ object ProxyChecker {
 
                 val authRes = ByteArray(2)
                 if (readFully(input, authRes) != 2 || authRes[1] != 0x00.toByte()) {
-                    return -1L // تایید اعتبار رد شد
+                    return -1L
                 }
             } else if (selectedMethod != 0x00) {
-                return -1L // متد احراز هویت نامعتبر است
+                return -1L
             }
 
-            // ۳. برقراری مسیر تونل به سمت سرور تست تلگرام
             val ipParts = TELEGRAM_TEST_IP.split(".").map { it.toInt().toByte() }
             if (ipParts.size != 4) return -1L
 
             val connPayload = ByteArray(10)
-            connPayload[0] = 0x05 // نسخه SOCKS
-            connPayload[1] = 0x01 // دستور CONNECT
-            connPayload[2] = 0x00 // فیلد رزرو شده
-            connPayload[3] = 0x01 // نوع آدرس: IPv4
+            connPayload[0] = 0x05
+            connPayload[1] = 0x01
+            connPayload[2] = 0x00
+            connPayload[3] = 0x01
             connPayload[4] = ipParts[0]
             connPayload[5] = ipParts[1]
             connPayload[6] = ipParts[2]
@@ -373,22 +362,20 @@ object ProxyChecker {
             out.write(connPayload)
             out.flush()
 
-            // ۴. بررسی موفقیت ایجاد تونل
             val connResHead = ByteArray(4)
             if (readFully(input, connResHead) != 4 || connResHead[1] != 0x00.toByte()) {
-                return -1L // اتصال در محیط پروکسی امکان‌پذیر نیست
+                return -1L
             }
 
-            // رد کردن فیلدهای متغیر آدرس و پورت پاسخ
             val atyp = connResHead[3].toInt() and 0xFF
             val skipLen = when (atyp) {
-                0x01 -> 4 + 2 // IPv4 (4) + Port (2)
+                0x01 -> 4 + 2
                 0x03 -> {
                     val domainLen = input.read()
                     if (domainLen == -1) return -1L
                     domainLen + 2
                 }
-                0x04 -> 16 + 2 // IPv6 (16) + Port (2)
+                0x04 -> 16 + 2
                 else -> return -1L
             }
 
@@ -398,21 +385,18 @@ object ProxyChecker {
             }
 
             return System.currentTimeMillis() - start
-        } catch (e: Exception) {
-            // ایجاد خطا در پردازش
+        } catch (e: Throwable) {
+            // خطا در پردازش سوکت
         } finally {
-            try { socket?.close() } catch (ignored: Exception) {}
+            try { socket?.close() } catch (ignored: Throwable) {}
         }
         return -1L
     }
 
-    /**
-     * شبیه‌سازی کامل و دقیق رمزنگاری MTProto، ارسال req_pq_multi و دریافت resPQ برای صحت‌سنجی نهایی با سرور تلگرام
-     */
     private fun checkMtProtoProxy(host: String, port: Int, secretHex: String, timeoutMs: Int): Long {
+        if (port !in 1..65535 || host.isBlank()) return -1L
         val start = System.currentTimeMillis()
 
-        // دیکد کردن هوشمند سکرت (هگزادسیمال و بیس۶۴)
         val decodedSecret = decodeSecret(secretHex)
         if (decodedSecret.size < 16) return -1L
 
@@ -445,9 +429,11 @@ object ProxyChecker {
                 sslSocket.soTimeout = timeoutMs
 
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-                    val sslParams = sslSocket.sslParameters
-                    sslParams.serverNames = listOf(javax.net.ssl.SNIHostName(domain))
-                    sslSocket.sslParameters = sslParams
+                    try {
+                        val sslParams = sslSocket.sslParameters
+                        sslParams.serverNames = listOf(javax.net.ssl.SNIHostName(domain))
+                        sslSocket.sslParameters = sslParams
+                    } catch (ignored: Throwable) {}
                 }
 
                 sslSocket.startHandshake()
@@ -456,7 +442,6 @@ object ProxyChecker {
                 rawSocket
             }
 
-            // تولید بایت‌های اولیه تصادفی هدر Obfuscated2 (۶۴ بایتی)
             val random = SecureRandom()
             val initBuffer = ByteArray(64)
             while (true) {
@@ -473,10 +458,10 @@ object ProxyChecker {
                 if (firstInt == 0xdddddddd.toInt() || 
                     firstInt == 0xeeeeeeee.toInt() || 
                     firstInt == 0xefefefef.toInt() ||
-                    firstInt == 0x44444444 || // "DDDD"
-                    firstInt == 0x45472020 || // "GET "
-                    firstInt == 0x54534f50 || // "POST"
-                    firstInt == 0x44414548) { // "HEAD"
+                    firstInt == 0x44444444 || 
+                    firstInt == 0x45472020 || 
+                    firstInt == 0x54534f50 || 
+                    firstInt == 0x44414548) { 
                     continue
                 }
                 
@@ -489,17 +474,14 @@ object ProxyChecker {
                 break
             }
 
-            // استفاده از پروتکل استاندارد Padded-Intermediate (0xdddddddd) برای پشتیبانی حداکثری پروکسی‌ها
             initBuffer[56] = 0xdd.toByte()
             initBuffer[57] = 0xdd.toByte()
             initBuffer[58] = 0xdd.toByte()
             initBuffer[59] = 0xdd.toByte()
 
-            // هدایت به دیتاسنتر ۲ تولیدی تلگرام (DC 2 Production، به صورت علامت‌دار و لیتل-اندین: -2 معادل 0xfe 0xff)
             initBuffer[60] = 0xfe.toByte()
             initBuffer[61] = 0xff.toByte()
 
-            // استخراج کلید و بردار رمزی فرستنده (Encryption)
             val keyBytes = ByteArray(32)
             System.arraycopy(initBuffer, 8, keyBytes, 0, 32)
             
@@ -515,16 +497,13 @@ object ProxyChecker {
                 init(Cipher.ENCRYPT_MODE, SecretKeySpec(encryptKey, "AES"), IvParameterSpec(encryptIv))
             }
 
-            // فرآیند رمزنگاری هدر جهت به‌روزشانی وضعیت Keystream
             val encryptedBuffer = encryptCipher.update(initBuffer)
             System.arraycopy(encryptedBuffer, 56, initBuffer, 56, 8)
 
-            // ارسال هدر هندی‌شیک به سوکت
             val out = socketToUse.getOutputStream()
             out.write(initBuffer)
             out.flush()
 
-            // استخراج کلید و بردار رمزی معکوس برای دریافت کلاینت (Decryption)
             val decryptKeyBytes = ByteArray(32)
             for (i in 0..31) {
                 decryptKeyBytes[i] = initBuffer[55 - i]
@@ -543,25 +522,23 @@ object ProxyChecker {
                 init(Cipher.DECRYPT_MODE, SecretKeySpec(decryptKey, "AES"), IvParameterSpec(decryptIv))
             }
 
-            // ارسال درخواست req_pq_multi برای راستی‌آزمایی در سطح دیتاسنترهای تلگرام
             val msgId = ((System.currentTimeMillis() / 1000) shl 32) and -4L
             val nonce = ByteArray(16).apply { random.nextBytes(this) }
             
             val tlBody = ByteBuffer.allocate(20).apply {
                 order(ByteOrder.LITTLE_ENDIAN)
-                putInt(0xbe7e8ef1.toInt()) // constructor_id
+                putInt(0xbe7e8ef1.toInt())
                 put(nonce)
             }.array()
 
             val unencryptedMsg = ByteBuffer.allocate(20 + tlBody.size).apply {
                 order(ByteOrder.LITTLE_ENDIAN)
-                putLong(0L) // auth_key_id
-                putLong(msgId) // msg_id
-                putInt(tlBody.size) // body size (20)
+                putLong(0L)
+                putLong(msgId)
+                putInt(tlBody.size)
                 put(tlBody)
             }.array()
 
-            // بسته‌بندی بر مبنای فریم Padded-Intermediate: [اندازه دیتا: ۴ بایت] [دیتا] [پدینگ رندوم]
             val payload = unencryptedMsg
             val paddingLen = 4
             val padding = ByteArray(paddingLen).apply { random.nextBytes(this) }
@@ -574,15 +551,12 @@ object ProxyChecker {
                 put(padding)
             }.array()
 
-            // رمزنگاری فریم و ارسال به سوکت
             val encryptedFrame = encryptCipher.update(frame)
             out.write(encryptedFrame)
             out.flush()
 
-            // منتظر بایت‌های پاسخ رمزنگاری‌شده واقعی سرور می‌مانیم
             val input = socketToUse.getInputStream()
 
-            // خواندن هدر فریم دریافتی (۴ بایت طول فریم)
             val lenBuffer = ByteArray(4)
             var lenBytesRead = 0
             while (lenBytesRead < 4) {
@@ -597,7 +571,6 @@ object ProxyChecker {
                 return -1L
             }
 
-            // خواندن کل بدنه فریم پاسخ
             val responsePayload = ByteArray(responseLen)
             var payloadBytesRead = 0
             while (payloadBytesRead < responseLen) {
@@ -607,7 +580,6 @@ object ProxyChecker {
             }
             val decryptedPayload = decryptCipher.update(responsePayload)
 
-            // بررسی سلامت پاسخ دریافتی در قالب پکت unencrypted تلگرام
             if (decryptedPayload.size < 24) {
                 return -1L
             }
@@ -618,29 +590,25 @@ object ProxyChecker {
             }
             val responseConstructorId = wrapBuffer.getInt(20)
             
-            if (responseConstructorId == 0x05162463) { // resPQ شناسه سازنده تایید موفق تلگرام
+            if (responseConstructorId == 0x05162463) {
                 return System.currentTimeMillis() - start
             }
 
-        } catch (e: Exception) {
-            // هندشیک ناموفق
+        } catch (e: Throwable) {
+            // هندلینگ ایمن هرگونه خطای شبکه یا الگوریتم
         } finally {
-            try { socketToUse?.close() } catch (ignored: Exception) {}
-            try { rawSocket?.close() } catch (ignored: Exception) {}
+            try { socketToUse?.close() } catch (ignored: Throwable) {}
+            try { rawSocket?.close() } catch (ignored: Throwable) {}
         }
         return -1L
     }
 
-    /**
-     * دیکد کردن جامع سکرت‌ها اعم از فرمت‌های هگزادسیمال و بیس۶۴
-     */
     private fun decodeSecret(secretStr: String): ByteArray {
         val clean = secretStr.trim().trimEnd(
             ')', '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '`', '~', 
             '[', ']', '{', '}', '|', ';', ':', '\'', ',', '.', '<', '>', '?', '/', ' ', '\t', '\n', '\r'
         ).lowercase()
 
-        // ۱. تلاش برای دیکد کردن به صورت هگزادسیمال
         try {
             if (clean.all { it in "0123456789abcdef" } && clean.length % 2 == 0) {
                 val data = ByteArray(clean.length / 2)
@@ -649,28 +617,18 @@ object ProxyChecker {
                 }
                 return data
             }
-        } catch (e: Exception) {
-            // انتقال به کاندیدای بعدی
-        }
+        } catch (ignored: Throwable) {}
 
-        // ۲. تلاش برای دیکد کردن به صورت بیس۶۴ (فرمت‌های استاندارد و URL Safe)
         val base64Flags = Base64.DEFAULT or Base64.NO_PADDING or Base64.URL_SAFE
         try {
             return Base64.decode(clean, base64Flags)
-        } catch (e: Exception) {
-            // انتقال به کاندیدای بعدی
-        }
+        } catch (ignored: Throwable) {}
         try {
             return Base64.decode(clean, Base64.DEFAULT)
-        } catch (e: Exception) {
-            // عدم موفقیت نهایی
-        }
+        } catch (ignored: Throwable) {}
         return ByteArray(0)
     }
 
-    /**
-     * کمکی برای خواندن کامل بایت‌های مدنظر از ورودی سوکت
-     */
     private fun readFully(input: InputStream, buffer: ByteArray): Int {
         var bytesRead = 0
         while (bytesRead < buffer.size) {

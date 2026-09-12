@@ -39,9 +39,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -135,24 +135,26 @@ fun CheckerScreen() {
     var isFetchingSubs by remember { mutableStateOf(false) }
     var fetchSubsJob by remember { mutableStateOf<Job?>(null) }
 
-    val proxyList = remember { mutableStateListOf<ProxyItem>() }
+    // لیست پروکسی‌های سالم به همراه لیست لاگ‌ها
+    val workingProxies = remember { mutableStateListOf<ProxyItem>() }
     val logsList = remember { mutableStateListOf<String>() }
 
-    // شمارنده‌های زنده
+    // شمارنده‌های زنده و دقیق
+    var totalCount by remember { mutableIntStateOf(0) }
     var checkedCount by remember { mutableIntStateOf(0) }
     var workingCount by remember { mutableIntStateOf(0) }
     var failedCount by remember { mutableIntStateOf(0) }
 
     // تفکیک آمار ۴ پروتکل در پروکسی‌های سالم
-    val workingMtprotoCount = proxyList.count { it.status == "Working" && it.type == ProxyType.MTPROTO }
-    val workingSocks5Count = proxyList.count { it.status == "Working" && it.type == ProxyType.SOCKS5 }
-    val workingHttpCount = proxyList.count { it.status == "Working" && it.type == ProxyType.HTTP }
-    val workingWebproxyCount = proxyList.count { it.status == "Working" && it.type == ProxyType.WEBPROXY }
+    var workingMtprotoCount by remember { mutableIntStateOf(0) }
+    var workingSocks5Count by remember { mutableIntStateOf(0) }
+    var workingHttpCount by remember { mutableIntStateOf(0) }
+    var workingWebproxyCount by remember { mutableIntStateOf(0) }
 
     // کمترین و میانگین پینگ
-    val workingProxies = proxyList.filter { it.status == "Working" && it.ping > 0L }.sortedBy { it.ping }
-    val bestPing = workingProxies.firstOrNull()?.ping ?: -1L
-    val avgPing = if (workingProxies.isNotEmpty()) workingProxies.map { it.ping }.average().toLong() else -1L
+    var bestPing by remember { mutableLongStateOf(-1L) }
+    var totalPingSum by remember { mutableLongStateOf(0L) }
+    val avgPing = if (workingCount > 0) (totalPingSum / workingCount) else -1L
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -173,6 +175,9 @@ fun CheckerScreen() {
 
     fun appendLog(message: String) {
         val timeStamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        if (logsList.size > 500) {
+            logsList.removeRange(0, 100)
+        }
         logsList.add("[$timeStamp] $message")
     }
 
@@ -235,8 +240,8 @@ fun CheckerScreen() {
     }
 
     fun startValidation() {
-        val concurrency = concurrencyText.toIntOrNull() ?: 25
-        val timeoutSec = timeoutText.toIntOrNull() ?: 5
+        val concurrency = (concurrencyText.toIntOrNull() ?: 25).coerceIn(1, 100)
+        val timeoutSec = (timeoutText.toIntOrNull() ?: 5).coerceIn(1, 120)
         val timeoutMs = timeoutSec * 1000
 
         val parsedList = ProxyChecker.extractProxiesFromText(inputText)
@@ -245,16 +250,22 @@ fun CheckerScreen() {
             return
         }
 
-        proxyList.clear()
-        proxyList.addAll(parsedList)
-
+        // مقداردهی اولیه متغیرهای مانیتورینگ
+        workingProxies.clear()
+        totalCount = parsedList.size
         checkedCount = 0
         workingCount = 0
         failedCount = 0
+        workingMtprotoCount = 0
+        workingSocks5Count = 0
+        workingHttpCount = 0
+        workingWebproxyCount = 0
+        bestPing = -1L
+        totalPingSum = 0L
         logsList.clear()
         isChecking = true
         
-        // سوئیچ خودکار به تب پروکسی‌های سالم برای تجربه کاربری عالی
+        // سوئیچ خودکار به تب پروکسی‌های سالم برای نمایش همزمان نتایج
         selectedTab = 1
 
         appendLog("Extracted ${parsedList.size} unique proxies across 4 protocols.")
@@ -262,31 +273,40 @@ fun CheckerScreen() {
         appendLog("Starting verify process (Timeout: ${timeoutSec}s, Concurrency: $concurrency)...")
 
         checkJob = coroutineScope.launch {
-            val semaphore = Semaphore(concurrency)
-            val jobs = parsedList.map { proxy ->
-                launch {
-                    semaphore.withPermit {
-                        if (!isChecking) return@launch
-                        val result = ProxyChecker.checkSingleProxy(proxy, timeoutMs, enableTcpPrecheck)
-                        
-                        val index = proxyList.indexOfFirst { 
-                            it.host == result.host && it.port == result.port && it.type == result.type 
-                        }
-                        if (index != -1) {
-                            proxyList[index] = result
-                        }
+            val channel = Channel<ProxyItem>(Channel.UNLIMITED)
+            parsedList.forEach { channel.trySend(it) }
+            channel.close()
 
-                        if (result.status == "Working") {
-                            workingCount++
-                            appendLog("✔ ACTIVE [${result.type}] ${result.host}:${result.port} - ${result.ping}ms")
-                        } else {
-                            failedCount++
+            // استفاده از ورکرپول کنترل‌شده به جای اسپاون نامحدود کوروتین برای جلوگیری قطعی از کرش
+            val workers = (1..concurrency).map {
+                launch(Dispatchers.IO) {
+                    for (proxy in channel) {
+                        if (!isChecking) break
+                        val result = ProxyChecker.checkSingleProxy(proxy, timeoutMs, enableTcpPrecheck)
+                        withContext(Dispatchers.Main) {
+                            if (result.status == "Working") {
+                                workingProxies.add(result)
+                                when (result.type) {
+                                    ProxyType.MTPROTO -> workingMtprotoCount++
+                                    ProxyType.SOCKS5 -> workingSocks5Count++
+                                    ProxyType.HTTP -> workingHttpCount++
+                                    ProxyType.WEBPROXY -> workingWebproxyCount++
+                                }
+                                if (bestPing == -1L || result.ping < bestPing) {
+                                    bestPing = result.ping
+                                }
+                                totalPingSum += result.ping
+                                workingCount++
+                                appendLog("✔ ACTIVE [${result.type}] ${result.host}:${result.port} - ${result.ping}ms")
+                            } else {
+                                failedCount++
+                            }
+                            checkedCount++
                         }
-                        checkedCount++
                     }
                 }
             }
-            jobs.forEach { it.join() }
+            workers.forEach { it.join() }
             isChecking = false
             appendLog("Verification finished! Working: $workingCount, Failed: $failedCount")
         }
@@ -327,7 +347,7 @@ fun CheckerScreen() {
     }
 
     fun copyAllToClipboard() {
-        val working = proxyList.filter { it.status == "Working" }.sortedBy { it.ping }
+        val working = workingProxies.sortedBy { it.ping }
         if (working.isEmpty()) {
             Toast.makeText(context, context.getString(R.string.toast_empty), Toast.LENGTH_SHORT).show()
             return
@@ -340,7 +360,7 @@ fun CheckerScreen() {
 
     fun copyTopNToClipboard() {
         val n = topNText.toIntOrNull() ?: 10
-        val working = proxyList.filter { it.status == "Working" }.sortedBy { it.ping }.take(n)
+        val working = workingProxies.sortedBy { it.ping }.take(n)
         if (working.isEmpty()) {
             Toast.makeText(context, context.getString(R.string.toast_empty), Toast.LENGTH_SHORT).show()
             return
@@ -361,7 +381,7 @@ fun CheckerScreen() {
     }
 
     fun connectToBestProxy() {
-        val best = proxyList.filter { it.status == "Working" }.minByOrNull { it.ping }
+        val best = workingProxies.minByOrNull { it.ping }
         if (best == null) {
             Toast.makeText(context, "هیچ پروکسی سالمی یافت نشد! ابتدا تست را آغاز کنید.", Toast.LENGTH_SHORT).show()
             return
@@ -370,7 +390,7 @@ fun CheckerScreen() {
     }
 
     fun exportAsTxt() {
-        val working = proxyList.filter { it.status == "Working" }.sortedBy { it.ping }
+        val working = workingProxies.sortedBy { it.ping }
         if (working.isEmpty()) {
             Toast.makeText(context, context.getString(R.string.toast_empty), Toast.LENGTH_SHORT).show()
             return
@@ -389,7 +409,7 @@ fun CheckerScreen() {
     }
 
     fun exportAsJson() {
-        val working = proxyList.filter { it.status == "Working" }.sortedBy { it.ping }
+        val working = workingProxies.sortedBy { it.ping }
         if (working.isEmpty()) {
             Toast.makeText(context, context.getString(R.string.toast_empty), Toast.LENGTH_SHORT).show()
             return
@@ -778,7 +798,7 @@ fun CheckerScreen() {
                     Text(
                         text = if (isChecking) "⏹️ توقف فرآیند بررسی پروکسی‌ها" else "شروع بررسی دقیق هر ۴ پروتکل ⚡", 
                         fontSize = 14.sp, 
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.Bold, 
                         color = Color.White
                     )
                 }
@@ -808,7 +828,7 @@ fun CheckerScreen() {
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = stringResource(id = R.string.stats_checked, checkedCount, proxyList.size),
+                                text = stringResource(id = R.string.stats_checked, checkedCount, totalCount),
                                 color = Color.White,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Medium
@@ -855,7 +875,7 @@ fun CheckerScreen() {
 
                 // نوار پیشرفت و دکمه توقف فوری در صورت فعال بودن بررسی
                 if (isChecking) {
-                    val progress = if (proxyList.isNotEmpty()) checkedCount.toFloat() / proxyList.size.toFloat() else 0f
+                    val progress = if (totalCount > 0) (checkedCount.toFloat() / totalCount.toFloat()).coerceIn(0f, 1f) else 0f
                     LinearProgressIndicator(
                         progress = progress,
                         modifier = Modifier
@@ -960,12 +980,12 @@ fun CheckerScreen() {
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // لیست تعاملی پروکسی‌های سالم
-                val workingItems = remember(proxyList.size, checkedCount) {
-                    proxyList.filter { it.status == "Working" }.sortedBy { it.ping }
+                // لیست تعاملی پروکسی‌های سالم با شناسه کاملاً یکتا برای جلوگیری قطعی از کرش
+                val sortedWorking = remember(workingProxies.size, isChecking) {
+                    workingProxies.sortedBy { it.ping }
                 }
 
-                if (workingItems.isEmpty()) {
+                if (sortedWorking.isEmpty()) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -985,7 +1005,7 @@ fun CheckerScreen() {
                             .fillMaxWidth()
                             .weight(1f)
                     ) {
-                        items(workingItems, key = { "${it.type}:${it.host}:${it.port}:${it.secret ?: ""}" }) { proxy ->
+                        items(sortedWorking, key = { it.id }) { proxy ->
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -1103,8 +1123,8 @@ fun CheckerScreen() {
                 Spacer(modifier = Modifier.height(6.dp))
 
                 // نوار پیشرفت
-                if (isChecking && proxyList.isNotEmpty()) {
-                    val progress = checkedCount.toFloat() / proxyList.size.toFloat()
+                if (isChecking && totalCount > 0) {
+                    val progress = (checkedCount.toFloat() / totalCount.toFloat()).coerceIn(0f, 1f)
                     LinearProgressIndicator(
                         progress = progress,
                         modifier = Modifier
