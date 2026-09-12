@@ -128,8 +128,12 @@ fun CheckerScreen() {
     LaunchedEffect(inputMode) { prefs.edit().putString("input_mode", inputMode.name).apply() }
     LaunchedEffect(subscriptionLinksText) { prefs.edit().putString("sub_links", subscriptionLinksText).apply() }
 
+    // متغیرهای عملیات و لغو/توقف
     var isChecking by remember { mutableStateOf(false) }
     var checkJob by remember { mutableStateOf<Job?>(null) }
+
+    var isFetchingSubs by remember { mutableStateOf(false) }
+    var fetchSubsJob by remember { mutableStateOf<Job?>(null) }
 
     val proxyList = remember { mutableStateListOf<ProxyItem>() }
     val logsList = remember { mutableStateListOf<String>() }
@@ -214,6 +218,22 @@ fun CheckerScreen() {
         }
     }
 
+    // متوقف کردن عملیات بررسی پروکسی‌ها
+    fun stopValidation() {
+        isChecking = false
+        checkJob?.cancel()
+        appendLog("⏹️ فرآیند بررسی توسط کاربر متوقف شد.")
+        Toast.makeText(context, "بررسی پروکسی‌ها متوقف شد.", Toast.LENGTH_SHORT).show()
+    }
+
+    // لغو کردن عملیات دریافت سابسکریپشن‌ها
+    fun cancelSubscriptionFetch() {
+        isFetchingSubs = false
+        fetchSubsJob?.cancel()
+        appendLog("⏹️ دریافت سابسکریپشن‌ها توسط کاربر لغو شد.")
+        Toast.makeText(context, "دریافت سابسکریپشن‌ها لغو شد.", Toast.LENGTH_SHORT).show()
+    }
+
     fun startValidation() {
         val concurrency = concurrencyText.toIntOrNull() ?: 25
         val timeoutSec = timeoutText.toIntOrNull() ?: 5
@@ -272,27 +292,28 @@ fun CheckerScreen() {
         }
     }
 
-    fun stopValidation() {
-        isChecking = false
-        checkJob?.cancel()
-        appendLog("Verification stopped by user.")
-    }
-
     fun loadSubscriptions() {
+        if (isFetchingSubs) {
+            cancelSubscriptionFetch()
+            return
+        }
         val links = subscriptionLinksText.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
         if (links.isEmpty()) {
             Toast.makeText(context, "لیست لینک‌های اشتراک خالی است!", Toast.LENGTH_SHORT).show()
             return
         }
-        coroutineScope.launch {
+        isFetchingSubs = true
+        fetchSubsJob = coroutineScope.launch {
             appendLog("Fetching subscription links with extended timeout...")
             val fetchedProxies = mutableListOf<String>()
-            links.forEach { subUrl ->
+            for (subUrl in links) {
+                if (!isFetchingSubs) break
                 val list = SubscriptionFetcher.fetchSubscription(subUrl) { msg ->
                     appendLog(msg)
                 }
                 list.forEach { fetchedProxies.add(it.originalUrl) }
             }
+            isFetchingSubs = false
             if (fetchedProxies.isNotEmpty()) {
                 inputText = fetchedProxies.distinct().joinToString("\n")
                 appendLog("Loaded ${fetchedProxies.size} proxies from subscriptions.")
@@ -300,7 +321,7 @@ fun CheckerScreen() {
                 Toast.makeText(context, "تعداد ${fetchedProxies.size} پروکسی استخراج شد!", Toast.LENGTH_SHORT).show()
             } else {
                 appendLog("No proxies could be extracted from subscription links.")
-                Toast.makeText(context, "هیچ پروکسی دریافت نشد. اتصال اینترنت را چک کنید.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "هیچ پروکسی دریافت نشد.", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -403,19 +424,56 @@ fun CheckerScreen() {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(top = 8.dp)
+            .padding(top = 6.dp)
     ) {
-        // هدر برنامه
-        Text(
-            text = stringResource(id = R.string.title),
-            fontSize = 19.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White,
+        // هدر برنامه همراه با نشان وضعیت توقف سریع
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 6.dp),
-            textAlign = TextAlign.Center
-        )
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = stringResource(id = R.string.title),
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+
+            // دکمه سراسری توقف در صورت فعال بودن عملیات
+            if (isChecking) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFFEF4444))
+                        .clickable { stopValidation() }
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = "⏹️ توقف بررسی",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            } else if (isFetchingSubs) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFFEF4444))
+                        .clickable { cancelSubscriptionFetch() }
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = "⏹️ لغو دریافت",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
 
         // نوار تب‌های سه‌گانه
         TabRow(
@@ -447,7 +505,7 @@ fun CheckerScreen() {
             )
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
 
         // --- محتوای تب اول: ورودی و تنظیمات هوشمند ---
         if (selectedTab == 0) {
@@ -470,7 +528,7 @@ fun CheckerScreen() {
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 6.dp),
+                        .padding(vertical = 4.dp),
                     colors = CardDefaults.cardColors(containerColor = Color(0xFF1D9BF0).copy(alpha = 0.15f)),
                     border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF1D9BF0))
                 ) {
@@ -497,7 +555,7 @@ fun CheckerScreen() {
                     color = Color(0xFF94A3B8),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(top = 6.dp, bottom = 4.dp)
+                    modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)
                 )
 
                 Row(
@@ -528,7 +586,7 @@ fun CheckerScreen() {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 8.dp),
+                        .padding(vertical = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedTextField(
@@ -563,7 +621,7 @@ fun CheckerScreen() {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 4.dp),
+                        .padding(vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
@@ -582,13 +640,13 @@ fun CheckerScreen() {
                     )
                 }
 
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(4.dp))
 
                 // چیپ‌های انتخاب نحوه ورود داده
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 8.dp),
+                        .padding(bottom = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     val modes = listOf(
@@ -638,7 +696,7 @@ fun CheckerScreen() {
                                 label = { Text("پروکسی‌های هر ۴ پروتکل تلگرام (MTProto / SOCKS / HTTP / WebProxy)") },
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(180.dp),
+                                    .height(170.dp),
                                 maxLines = 2000
                             )
                         }
@@ -660,7 +718,7 @@ fun CheckerScreen() {
                                 label = { Text("محتوای فایل انتخاب‌شده") },
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(180.dp),
+                                    .height(170.dp),
                                 maxLines = 2000
                             )
                         }
@@ -668,13 +726,29 @@ fun CheckerScreen() {
                     InputMode.SUBS -> {
                         Column {
                             Button(
-                                onClick = { loadSubscriptions() },
+                                onClick = { 
+                                    if (isFetchingSubs) cancelSubscriptionFetch() else loadSubscriptions() 
+                                },
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(bottom = 6.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (isFetchingSubs) Color(0xFFEF4444) else MaterialTheme.colorScheme.primary
+                                )
                             ) {
-                                Text(stringResource(id = R.string.load_subs_btn), fontSize = 12.sp)
+                                if (isFetchingSubs) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp), 
+                                            color = Color.White, 
+                                            strokeWidth = 2.dp
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("⏹️ لغو دریافت سابسکریپشن‌ها", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                } else {
+                                    Text(stringResource(id = R.string.load_subs_btn), fontSize = 12.sp)
+                                }
                             }
                             OutlinedTextField(
                                 value = subscriptionLinksText,
@@ -682,22 +756,31 @@ fun CheckerScreen() {
                                 label = { Text("لینک‌های سابسکریپشن عمومی و شخصی (خط‌به‌خط)") },
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(180.dp),
+                                    .height(170.dp),
                                 maxLines = 2000
                             )
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-                // دکمه شروع تست عملیاتی
+                // دکمه شروع یا توقف عملیات بررسی
                 Button(
-                    onClick = { startValidation() },
+                    onClick = { 
+                        if (isChecking) stopValidation() else startValidation() 
+                    },
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isChecking) Color(0xFFEF4444) else Color(0xFF10B981)
+                    )
                 ) {
-                    Text("شروع بررسی دقیق هر ۴ پروتکل ⚡", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        text = if (isChecking) "⏹️ توقف فرآیند بررسی پروکسی‌ها" else "شروع بررسی دقیق هر ۴ پروتکل ⚡", 
+                        fontSize = 14.sp, 
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
                 }
                 
                 Spacer(modifier = Modifier.height(24.dp))
@@ -767,6 +850,34 @@ fun CheckerScreen() {
                                 Text("میانگین پینگ: ${avgPing}ms", color = Color(0xFF94A3B8), fontSize = 11.sp)
                             }
                         }
+                    }
+                }
+
+                // نوار پیشرفت و دکمه توقف فوری در صورت فعال بودن بررسی
+                if (isChecking) {
+                    val progress = if (proxyList.isNotEmpty()) checkedCount.toFloat() / proxyList.size.toFloat() else 0f
+                    LinearProgressIndicator(
+                        progress = progress,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp)
+                            .clip(RoundedCornerShape(4.dp)),
+                        color = Color(0xFF3B82F6),
+                        trackColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+                    )
+                    Button(
+                        onClick = { stopValidation() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444))
+                    ) {
+                        Text(
+                            text = "⏹️ توقف فرآیند بررسی پروکسی‌ها", 
+                            fontSize = 12.sp, 
+                            fontWeight = FontWeight.Bold, 
+                            color = Color.White
+                        )
                     }
                 }
 
@@ -979,12 +1090,13 @@ fun CheckerScreen() {
                     onClick = { if (isChecking) stopValidation() else startValidation() },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isChecking) Color.Red else Color(0xFF10B981)
+                        containerColor = if (isChecking) Color(0xFFEF4444) else Color(0xFF10B981)
                     )
                 ) {
                     Text(
                         text = if (isChecking) stringResource(id = R.string.stop_btn) else stringResource(id = R.string.start_btn),
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
                     )
                 }
 
