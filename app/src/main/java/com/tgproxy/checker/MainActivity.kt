@@ -17,6 +17,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -454,12 +455,23 @@ fun CheckerScreen() {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(
-                text = stringResource(id = R.string.title),
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(id = R.string.title),
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color(0xFF2563EB))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text("v1.2.0", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            }
 
             // دکمه سراسری توقف در صورت فعال بودن عملیات
             if (isChecking) {
@@ -1005,7 +1017,7 @@ fun CheckerScreen() {
                             .fillMaxWidth()
                             .weight(1f)
                     ) {
-                        items(sortedWorking, key = { it.id }) { proxy ->
+                        itemsIndexed(sortedWorking, key = { index, proxy -> "${proxy.id}_$index" }) { _, proxy ->
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()

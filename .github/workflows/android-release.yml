@@ -4,10 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'شماره نسخه انتشار (مثال: 1.1.0 یا v1.1.0) - در صورت خالی گذاشتن بر اساس شماره اجرا ساخته می‌شود'
+        description: 'شماره نسخه انتشار (مثال: 1.2.0 یا v1.2.0)'
         required: false
-        default: ''
+        default: '1.2.0'
   push:
+    branches:
+      - main
     tags:
       - 'v*'
 
@@ -33,8 +35,8 @@ jobs:
             CLEAN_VER="${GITHUB_REF#refs/tags/v}"
             TAG_VER="${GITHUB_REF#refs/tags/}"
           else
-            CLEAN_VER="1.1.${{ github.run_number }}"
-            TAG_VER="v${CLEAN_VER}"
+            CLEAN_VER="1.2.0"
+            TAG_VER="v1.2.0"
           fi
           
           RUN_NUM="${{ github.run_number }}"
@@ -133,7 +135,7 @@ jobs:
           draft: false
           prerelease: false
           body: |
-            ## 🛡️ Telegram Proxy Checker ${{ env.TAG_NAME }}
+            ## 🛡️ Telegram Proxy Checker ${{ env.TAG_NAME }} (Crash Fixed)
             
             ### 🌟 قابلیت‌های جدید و بهینه‌سازی‌ها:
             - **پشتیبانی کامل از هر ۴ پروتکل تلگرام:** تست عمیق و واقعی MTProto (ساده، dd، Fake-TLS)، SOCKS5، HTTP CONNECT و WebProxy.
